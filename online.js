@@ -1,0 +1,331 @@
+"use strict";
+
+const ONLINE_MODE = true;
+const ROOM_IDS = ["room1","room2","room3","room4"];
+const ONLINE_STORAGE = {
+  clientId:"catan-online-client-id",
+  name:"catan-online-player-name",
+  roomId:"catan-online-room-id",
+};
+const SERVER_ORIGIN = String(window.CATAN_SERVER_URL||"").replace(/\/+$/,"");
+
+let onlineSocket = null;
+let onlineRoomState = null;
+let onlineRoomId = null;
+let applyingRemoteState = false;
+let suppressOnlineSync = false;
+let onlineSyncTimer = null;
+let roomRefreshTimer = null;
+let reconnectTimer = null;
+let reconnectAttempts = 0;
+
+function makeClientId(){
+  return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+const ONLINE_CLIENT_ID = localStorage.getItem(ONLINE_STORAGE.clientId) || makeClientId();
+localStorage.setItem(ONLINE_STORAGE.clientId,ONLINE_CLIENT_ID);
+
+function localPlayerId(){
+  if(!game) return -1;
+  if(!ONLINE_MODE) return 0;
+  const player=game.players.find(p=>p.clientId===ONLINE_CLIENT_ID);
+  return player?.id??-1;
+}
+function localPlayer(){
+  return game?.players?.find(p=>p.clientId===ONLINE_CLIENT_ID) || game?.players?.[0] || null;
+}
+function isLocalPlayer(player){
+  if(!player) return false;
+  return ONLINE_MODE ? player.clientId===ONLINE_CLIENT_ID : player.id===0;
+}
+function isLocalTurn(){
+  return !!game && isLocalPlayer(currentPlayer());
+}
+function isOnlineHost(){
+  return onlineRoomState?.hostId===ONLINE_CLIENT_ID;
+}
+function scheduleCpuIfNeeded(){
+  if(!game || currentPlayer().human) return;
+  if(!ONLINE_MODE || isOnlineHost()) scheduleCpu();
+}
+
+function wsOrigin(){
+  return SERVER_ORIGIN.replace(/^http:/,"ws:").replace(/^https:/,"wss:");
+}
+function onlineSend(payload){
+  if(onlineSocket?.readyState!==WebSocket.OPEN) return false;
+  onlineSocket.send(JSON.stringify(payload));
+  return true;
+}
+function cloneGameForNetwork(){
+  return JSON.parse(JSON.stringify(game,(key,value)=>{
+    if(typeof value==="function") return undefined;
+    if(key==="pendingAfterRobber") return null;
+    return value;
+  }));
+}
+function onlineAfterRender(){
+  if(!ONLINE_MODE || !game || applyingRemoteState || suppressOnlineSync) return;
+  handleOnlinePendingUI();
+  if(!onlineRoomState || onlineRoomState.phase!=="playing") return;
+  clearTimeout(onlineSyncTimer);
+  onlineSyncTimer=setTimeout(()=>{
+    if(applyingRemoteState || suppressOnlineSync || !game) return;
+    onlineSend({type:"game_state",game:cloneGameForNetwork()});
+  },35);
+}
+
+function setSocketState(text,stateClass=""){
+  const el=document.getElementById("onlineSocketState");
+  if(!el) return;
+  el.textContent=text;
+  el.className=`socket-state ${stateClass}`;
+}
+function showOnlineMessage(text,error=false){
+  const el=document.getElementById("onlineConnectionMessage");
+  if(!el) return;
+  el.textContent=text;
+  el.classList.toggle("error",error);
+}
+
+async function fetchRoomSummaries(){
+  if(!SERVER_ORIGIN || SERVER_ORIGIN.includes("YOUR-")){
+    showOnlineMessage("config.jsのCloudflare Worker URLを設定してください。",true);
+    return;
+  }
+  try{
+    const response=await fetch(`${SERVER_ORIGIN}/rooms`,{cache:"no-store"});
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data=await response.json();
+    renderRoomCards(data.rooms||[]);
+    showOnlineMessage("入室する部屋を選択してください。");
+  }catch(error){
+    showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
+  }
+}
+
+function renderRoomCards(rooms){
+  const byId=new Map(rooms.map(room=>[room.roomId,room]));
+  $("roomCards").innerHTML=ROOM_IDS.map((roomId,index)=>{
+    const room=byId.get(roomId)||{phase:"lobby",connected:0,members:0,settings:{playerCount:4}};
+    const playing=room.phase==="playing";
+    const full=room.connected>=6;
+    const stateText=playing?"対戦中":"ロビー";
+    return `<button class="room-card ${playing?"playing":""} ${full?"full":""}" data-room-id="${roomId}" ${playing||full?"disabled":""}>
+      <span class="room-card-title">部屋 ${index+1}</span>
+      <span class="room-card-state">${stateText}</span>
+      <span class="room-card-count">接続 ${room.connected}/6人</span>
+    </button>`;
+  }).join("");
+  document.querySelectorAll("[data-room-id]").forEach(button=>{
+    button.addEventListener("click",()=>joinOnlineRoom(button.dataset.roomId));
+  });
+}
+
+function currentOnlineName(){
+  return ($("onlinePlayerName").value||"").trim().slice(0,12);
+}
+function joinOnlineRoom(roomId){
+  const name=currentOnlineName();
+  if(!name){
+    showOnlineMessage("名前を入力してください。",true);
+    $("onlinePlayerName").focus();
+    return;
+  }
+  localStorage.setItem(ONLINE_STORAGE.name,name);
+  onlineRoomId=roomId;
+  localStorage.setItem(ONLINE_STORAGE.roomId,roomId);
+  clearTimeout(reconnectTimer);
+  if(onlineSocket) onlineSocket.close();
+  const url=new URL(`${wsOrigin()}/ws`);
+  url.searchParams.set("room",roomId);
+  url.searchParams.set("clientId",ONLINE_CLIENT_ID);
+  url.searchParams.set("name",name);
+  showOnlineMessage("部屋へ接続しています……");
+  onlineSocket=new WebSocket(url);
+  setSocketState("接続中","");
+
+  onlineSocket.addEventListener("open",()=>{
+    reconnectAttempts=0;
+    setSocketState("接続中","connected");
+  });
+  onlineSocket.addEventListener("message",event=>{
+    let message;
+    try{ message=JSON.parse(event.data); }catch{ return; }
+    if(message.type==="error"){
+      showOnlineMessage(message.message||"接続エラー",true);
+      return;
+    }
+    if(message.type==="room_state"){
+      receiveRoomState(message.state);
+    }
+  });
+  onlineSocket.addEventListener("close",()=>{
+    setSocketState("切断","disconnected");
+    if(onlineRoomId){
+      reconnectAttempts++;
+      const wait=Math.min(8000,800*reconnectAttempts);
+      reconnectTimer=setTimeout(()=>joinOnlineRoom(onlineRoomId),wait);
+    }
+  });
+  onlineSocket.addEventListener("error",()=>{
+    setSocketState("接続エラー","disconnected");
+  });
+}
+
+function receiveRoomState(state){
+  onlineRoomState=state;
+  onlineRoomId=state.roomId;
+  renderOnlineLobby();
+  if(state.phase==="playing" && state.game){
+    applyingRemoteState=true;
+    game=state.game;
+    if(!Array.isArray(game.logHistory)) game.logHistory=[];
+    if(!Array.isArray(game.discardQueue)) game.discardQueue=[];
+    if(!Array.isArray(game.pendingFishDraws)) game.pendingFishDraws=[];
+    $("onlineLobby").classList.add("hidden");
+    $("gameHeader").classList.remove("hidden");
+    $("gameMain").classList.remove("hidden");
+    $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
+    $("onlineGameSubtitle").textContent=`${game.playerCount}人用${game.fishermen?"・漁師拡張":""}`;
+    render();
+    applyingRemoteState=false;
+    handleOnlinePendingUI();
+    scheduleCpuIfNeeded();
+  }else{
+    game=null;
+    closeChoiceModal();
+    closeTradeModal();
+    hideDiscardModal();
+    $("onlineLobby").classList.remove("hidden");
+    $("gameHeader").classList.add("hidden");
+    $("gameMain").classList.add("hidden");
+  }
+}
+
+function renderOnlineLobby(){
+  if(!onlineRoomState){
+    $("roomSelectView").classList.remove("hidden");
+    $("joinedRoomView").classList.add("hidden");
+    return;
+  }
+  $("roomSelectView").classList.add("hidden");
+  $("joinedRoomView").classList.remove("hidden");
+  const roomNumber=ROOM_IDS.indexOf(onlineRoomState.roomId)+1;
+  $("joinedRoomTitle").textContent=`部屋 ${roomNumber}`;
+  $("joinedRoomStatus").textContent=onlineRoomState.phase==="playing"?"対戦中":"参加者が揃うのを待っています。";
+
+  $("onlineMembers").innerHTML=onlineRoomState.members.map((member,index)=>`
+    <div class="online-member ${member.connected?"":"disconnected"}">
+      <span class="player-dot" style="background:${PLAYER_COLORS[index]||"#64748b"}"></span>
+      <span>${escapeHtml(member.name)}${member.clientId===ONLINE_CLIENT_ID?"（あなた）":""}<br><small>${member.connected?"接続中":"切断中"}</small></span>
+      ${member.clientId===onlineRoomState.hostId?'<span class="online-member-host">ホスト</span>':""}
+    </div>
+  `).join("");
+
+  const host=isOnlineHost();
+  $("playerCount").value=String(onlineRoomState.settings.playerCount);
+  $("fishermenEnabled").checked=!!onlineRoomState.settings.fishermen;
+  $("playerCount").disabled=!host;
+  $("fishermenEnabled").disabled=!host;
+  $("resetLobbyRoomBtn").classList.toggle("hidden",!host);
+
+  const connected=onlineRoomState.members.filter(m=>m.connected).length;
+  const needed=onlineRoomState.settings.playerCount;
+  $("startRequirement").textContent=connected===needed
+    ? `${connected}人揃っています。開始できます。`
+    : `設定は${needed}人です。現在${connected}人接続中です。`;
+  $("startOnlineGameBtn").disabled=!host || connected!==needed || onlineRoomState.phase!=="lobby";
+  $("startOnlineGameBtn").textContent=host?"ゲーム開始":"ホストの開始待ち";
+}
+
+function sendSettings(){
+  if(!isOnlineHost()) return;
+  onlineSend({
+    type:"set_settings",
+    settings:{
+      playerCount:Number($("playerCount").value),
+      fishermen:$("fishermenEnabled").checked,
+    },
+  });
+}
+
+function startOnlineGame(){
+  if(!isOnlineHost() || !onlineRoomState) return;
+  const members=onlineRoomState.members.filter(member=>member.connected);
+  const playerCount=onlineRoomState.settings.playerCount;
+  if(members.length!==playerCount) return;
+
+  suppressOnlineSync=true;
+  $("playerCount").value=String(playerCount);
+  $("fishermenEnabled").checked=!!onlineRoomState.settings.fishermen;
+  newGame();
+  game.players.forEach((player,index)=>{
+    const member=members[index];
+    player.human=true;
+    player.name=member.name;
+    player.clientId=member.clientId;
+  });
+  game.online=true;
+  game.roomId=onlineRoomState.roomId;
+  game.pendingTrade=null;
+  game.discardQueue=[];
+  game.discardPlayerId=null;
+  game.logHistory=[];
+  log(`${playerCount}人のオンライン対戦を開始しました。`);
+  if(game.fishermen) log("漁師拡張を使用します。");
+  suppressOnlineSync=false;
+  onlineSend({type:"start_game",game:cloneGameForNetwork()});
+}
+
+function leaveOnlineRoom(){
+  onlineRoomId=null;
+  localStorage.removeItem(ONLINE_STORAGE.roomId);
+  clearTimeout(reconnectTimer);
+  if(onlineSocket?.readyState===WebSocket.OPEN) onlineSend({type:"leave"});
+  onlineSocket?.close();
+  onlineSocket=null;
+  onlineRoomState=null;
+  game=null;
+  $("joinedRoomView").classList.add("hidden");
+  $("roomSelectView").classList.remove("hidden");
+  $("onlineLobby").classList.remove("hidden");
+  $("gameHeader").classList.add("hidden");
+  $("gameMain").classList.add("hidden");
+  setSocketState("未接続","disconnected");
+  fetchRoomSummaries();
+}
+
+function resetOnlineRoom(){
+  if(!isOnlineHost()) return;
+  onlineSend({type:"reset_room"});
+}
+
+function initOnlineApp(){
+  const savedName=localStorage.getItem(ONLINE_STORAGE.name)||"";
+  $("onlinePlayerName").value=savedName;
+  $("refreshRoomsBtn").addEventListener("click",fetchRoomSummaries);
+  $("leaveRoomLobbyBtn").addEventListener("click",leaveOnlineRoom);
+  $("leaveRoomGameBtn").addEventListener("click",leaveOnlineRoom);
+  $("returnLobbyBtn").addEventListener("click",resetOnlineRoom);
+  $("resetLobbyRoomBtn").addEventListener("click",resetOnlineRoom);
+  $("startOnlineGameBtn").addEventListener("click",startOnlineGame);
+  $("playerCount").addEventListener("change",sendSettings);
+  $("fishermenEnabled").addEventListener("change",sendSettings);
+  $("onlinePlayerName").addEventListener("change",()=>{
+    const name=currentOnlineName();
+    if(name) localStorage.setItem(ONLINE_STORAGE.name,name);
+  });
+
+  fetchRoomSummaries();
+  roomRefreshTimer=setInterval(()=>{
+    if(!onlineRoomId) fetchRoomSummaries();
+  },5000);
+
+  const requestedRoom=new URLSearchParams(location.search).get("room");
+  const savedRoom=localStorage.getItem(ONLINE_STORAGE.roomId);
+  const roomToJoin=ROOM_IDS.includes(requestedRoom)?requestedRoom:savedRoom;
+  if(ROOM_IDS.includes(roomToJoin) && savedName){
+    joinOnlineRoom(roomToJoin);
+  }
+}

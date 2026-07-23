@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>カタン オンライン版（私用）</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <section id="onlineLobby" class="online-lobby">
+    <div class="online-lobby-card">
+      <div class="online-title">
+        <h1>カタン オンライン</h1>
+        <p>固定4部屋・3～6人用</p>
+      </div>
+
+      <div id="roomSelectView">
+        <label class="online-name-label">プレイヤー名
+          <input id="onlinePlayerName" type="text" maxlength="12" placeholder="名前を入力">
+        </label>
+        <div id="onlineConnectionMessage" class="online-message">部屋を選択してください。</div>
+        <div id="roomCards" class="room-cards"></div>
+        <button id="refreshRoomsBtn" class="secondary online-refresh">部屋情報を更新</button>
+      </div>
+
+      <div id="joinedRoomView" class="hidden">
+        <div class="joined-room-heading">
+          <div>
+            <h2 id="joinedRoomTitle">部屋</h2>
+            <p id="joinedRoomStatus"></p>
+          </div>
+          <button id="leaveRoomLobbyBtn" class="secondary">退室</button>
+        </div>
+
+        <div class="online-room-grid">
+          <section class="online-members-box">
+            <h3>参加者</h3>
+            <div id="onlineMembers"></div>
+          </section>
+          <section class="online-settings-box">
+            <h3>ゲーム設定</h3>
+            <label>参加人数
+              <select id="playerCount">
+                <option value="3">3人</option>
+                <option value="4" selected>4人</option>
+                <option value="5">5人</option>
+                <option value="6">6人</option>
+              </select>
+            </label>
+            <label class="expansion-toggle">
+              <input type="checkbox" id="fishermenEnabled" checked> 漁師拡張
+            </label>
+            <p id="startRequirement" class="start-requirement"></p>
+            <button id="startOnlineGameBtn">ゲーム開始</button>
+            <button id="resetLobbyRoomBtn" class="secondary">部屋を初期化</button>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <header id="gameHeader" class="hidden">
+    <div>
+      <h1>カタン オンライン</h1>
+      <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
+    </div>
+    <div class="online-game-controls">
+      <span id="currentRoomLabel">未接続</span>
+      <span id="onlineSocketState" class="socket-state">接続確認中</span>
+      <button id="returnLobbyBtn" class="secondary">ロビーへ戻す</button>
+      <button id="leaveRoomGameBtn" class="secondary">退室</button>
+    </div>
+  </header>
+
+  <main id="gameMain" class="hidden">
+    <section class="board-wrap">
+      <svg id="board" viewBox="0 0 900 760" aria-label="カタン盤面"></svg>
+      <div id="resourcePopLayer" class="resource-pop-layer" aria-live="polite"></div>
+      <div id="overlayMessage" class="overlay hidden"></div>
+    </section>
+
+    <aside>
+      <section class="panel turn-panel">
+        <h2 id="turnTitle">準備中</h2>
+        <div id="phaseText"></div>
+        <div id="diceArea">
+          <div class="dice" id="die1">–</div>
+          <div class="dice" id="die2">–</div>
+          <button id="rollBtn">ダイスを振る</button>
+          <button id="endTurnBtn" class="danger">ターン終了</button>
+        </div>
+      </section>
+
+      <section class="panel resources-panel">
+        <h2>あなたの資源</h2>
+        <div id="resourceCards" class="resource-grid"></div>
+        <div id="pieceCounts" class="small-grid"></div>
+      </section>
+
+      <section class="panel build-panel">
+        <h2>建設</h2>
+        <div class="button-grid">
+          <button data-action="road">街道<br><small>木材＋レンガ</small></button>
+          <button data-action="settlement">開拓地<br><small>木材＋レンガ＋羊毛＋小麦</small></button>
+          <button data-action="city">都市<br><small>小麦2＋鉱石3</small></button>
+          <button data-action="dev">発展カード<br><small>羊毛＋小麦＋鉱石</small></button>
+        </div>
+        <button id="cancelModeBtn" class="secondary">選択を解除</button>
+      </section>
+
+      <section class="panel trade-panel">
+        <h2>交易</h2>
+        <div class="trade-row">
+          <select id="tradeGive"></select>
+          <span id="tradeRate">4枚 → 1枚</span>
+          <select id="tradeGet"></select>
+        </div>
+        <button id="bankTradeBtn">銀行・港と交易</button>
+        <button id="cpuTradeBtn" class="secondary">プレイヤーと交易</button>
+      </section>
+
+
+      <section id="fishPanel" class="panel fish-panel hidden">
+        <h2>漁師</h2>
+        <div id="fishStatus" class="fish-status"></div>
+        <div id="fishTokens" class="fish-tokens"></div>
+        <div class="fish-selection-row">
+          <span id="fishSelectedTotal">選択：0匹</span>
+          <button id="fishClearBtn" class="secondary fish-clear">選択解除</button>
+        </div>
+        <div class="fish-action-grid">
+          <button data-fish-action="removeRobber">2匹：🐱を盤外へ</button>
+          <button data-fish-action="steal">3匹：資源を奪う</button>
+          <button data-fish-action="resource">4匹：好きな資源</button>
+          <button data-fish-action="road">5匹：無料街道</button>
+          <button data-fish-action="dev">7匹：無料発展</button>
+        </div>
+        <button id="bootTransferBtn" class="boot-button secondary">ボロ靴を渡す</button>
+      </section>
+      <section class="panel players-panel">
+        <h2>プレイヤー</h2>
+        <div id="players"></div>
+      </section>
+
+      <section class="panel dev-panel">
+        <h2>発展カード</h2>
+        <div id="devCards"></div>
+      </section>
+
+      <section class="log-panel side-log">
+        <h2>ゲームログ</h2>
+        <div id="log"></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="discardModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="discardTitle">
+    <div class="discard-dialog">
+      <h2 id="discardTitle">資源を捨てます</h2>
+      <p id="discardGuide"></p>
+      <div id="discardChoices" class="discard-choices"></div>
+      <div class="discard-summary">
+        <span id="discardCount">選択 0 / 0枚</span>
+        <button id="discardResetBtn" class="secondary discard-reset">選択を戻す</button>
+        <button id="discardConfirmBtn" class="discard-confirm" disabled>確定</button>
+      </div>
+    </div>
+  </div>
+
+
+  <div id="choiceModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="choiceTitle">
+    <div class="choice-dialog">
+      <h2 id="choiceTitle">選択してください</h2>
+      <p id="choiceGuide"></p>
+      <div id="choiceOptions" class="choice-options"></div>
+      <div class="choice-footer">
+        <button id="choiceCancelBtn" class="secondary">戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tradeModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="tradeModalTitle">
+    <div class="trade-dialog">
+      <h2 id="tradeModalTitle">プレイヤーと交易</h2>
+      <p>相手と交換内容を選択してください。複数種類・複数枚をまとめて提案できます。</p>
+
+      <h3>交易相手</h3>
+      <div id="tradePlayerChoices" class="trade-player-choices"></div>
+
+      <div class="trade-editor-grid">
+        <section class="trade-editor offer">
+          <h3>あなたが渡す資源</h3>
+          <div id="tradeOfferEditor" class="trade-resource-editor"></div>
+        </section>
+        <section class="trade-editor request">
+          <h3>あなたが貰う資源</h3>
+          <div id="tradeRequestEditor" class="trade-resource-editor"></div>
+        </section>
+      </div>
+
+      <div id="tradeProposalSummary" class="trade-proposal-summary"></div>
+      <div class="trade-modal-footer">
+        <button id="tradeCancelBtn" class="secondary">取り消す</button>
+        <button id="tradeConfirmBtn" class="trade-confirm" disabled>この内容で提案</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="online.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

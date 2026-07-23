@@ -1,0 +1,49 @@
+# カタン オンライン版 v1.5
+
+GitHub Pages＋Cloudflare Workers＋Durable Objectsで動く私用オンライン版です。
+
+## 内容
+
+- 固定4部屋
+- 3～6人
+- ホストが人数と漁師拡張ON/OFFを設定
+- 設定人数と接続人数が一致すると開始可能
+- 全員がブラウザから参加
+- ゲーム状態を部屋ごとにDurable Objectへ保存
+- 切断後、同じブラウザなら同じ席へ再接続
+- ホストの「ロビーへ戻す」で対戦を終了して同じ参加者でロビーへ戻る
+- 鉱石アイコンを🪨へ変更
+- 湖タイル画像は `assets/tiles/lake.webp` または `lake.png`
+
+## GitHub Pagesへ置く物
+
+この `github-pages` フォルダの中身を、GitHubリポジトリのルートへアップロードします。
+
+- index.html
+- style.css
+- game.js
+- online.js
+- config.js
+- assets
+- .nojekyll
+
+## Worker URL
+
+標準設定は次のURLです。
+
+`https://catan-online-server.naitoryo7110.workers.dev`
+
+Cloudflareで別のURLが表示された場合、`config.js` のURLだけ書き換えてください。
+
+## 現在の同期方式
+
+私用ゲームとして扱いやすいよう、各手番のブラウザが状態を更新し、Durable Objectが部屋全員へ同期する方式です。
+ゲーム状態は参加者のブラウザへ配信されるため、開発者ツールを使った秘匿情報の解析まで防ぐ設計ではありません。
+
+
+## 追加のオンライン処理
+
+- 7で複数人が捨てる場合、対象プレイヤーの画面へ順番に選択画面を表示
+- 魚チップ7枚時の引き直しも、対象プレイヤー本人の画面で選択
+- 対戦中にページを再読み込みしても、同じブラウザなら直前の部屋へ再接続
+- 人間同士の交易は、相手画面へYES／NOを表示

@@ -98,7 +98,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.8");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -173,20 +173,37 @@ function joinOnlineRoom(roomId){
   });
 }
 
+const APP_VERSION="v1.8";
+
+function setScreenElement(element,visible,displayValue){
+  if(!element) return;
+  element.hidden=!visible;
+  element.classList.toggle("hidden",!visible);
+  if(visible){
+    element.style.setProperty("display",displayValue,"important");
+  }else{
+    element.style.setProperty("display","none","important");
+  }
+}
+
 function showLobbyScreen(){
   document.body.classList.add("online-lobby-mode");
   document.body.classList.remove("online-game-mode");
-  showLobbyScreen();
-  window.scrollTo({top:0,left:0,behavior:"auto"});
+  setScreenElement($("onlineLobby"),true,"grid");
+  setScreenElement($("gameHeader"),false,"flex");
+  setScreenElement($("gameMain"),false,"grid");
+  document.title=`カタン オンライン ${APP_VERSION}（ロビー）`;
+  window.scrollTo(0,0);
 }
 
 function showGameScreen(){
   document.body.classList.remove("online-lobby-mode");
   document.body.classList.add("online-game-mode");
-  $("onlineLobby").classList.add("hidden");
-  $("gameHeader").classList.remove("hidden");
-  $("gameMain").classList.remove("hidden");
-  window.scrollTo({top:0,left:0,behavior:"auto"});
+  setScreenElement($("onlineLobby"),false,"grid");
+  setScreenElement($("gameHeader"),true,"flex");
+  setScreenElement($("gameMain"),true,"grid");
+  document.title=`カタン オンライン ${APP_VERSION}（対戦中）`;
+  window.scrollTo(0,0);
 }
 
 function receiveRoomState(state){

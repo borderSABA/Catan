@@ -685,3 +685,30 @@ body.online-game-mode {
     overflow: auto;
   }
 }
+
+
+/* v1.8：画面切替をhidden属性・インライン指定でも固定 */
+#onlineLobby[hidden],
+#gameHeader[hidden],
+#gameMain[hidden],
+[hidden] {
+  display: none !important;
+}
+
+.version-badge {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 7px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #fbbf24;
+  color: #422006;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .03em;
+}
+
+.game-version {
+  background: #dbeafe;
+  color: #1e3a8a;
+}

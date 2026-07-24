@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.11");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.13");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -269,7 +269,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.11";
+const APP_VERSION="v1.13";
 
 function setScreenElement(element,visible,displayValue){
   if(!element) return;
@@ -308,10 +308,22 @@ function receiveRoomState(state){
   renderOnlineLobby();
   if(state.phase==="playing" && state.game){
     applyingRemoteState=true;
+    const hadActiveGame=!!game;
     game=state.game;
     if(!Array.isArray(game.logHistory)) game.logHistory=[];
     if(!Array.isArray(game.discardQueue)) game.discardQueue=[];
     if(!Array.isArray(game.pendingFishDraws)) game.pendingFishDraws=[];
+    if(!Array.isArray(game.resolvedTradeIds)) game.resolvedTradeIds=[];
+    if(!Array.isArray(game.awardEvents)) game.awardEvents=[];
+
+    // 再接続時は過去の演出をまとめて再生しない。
+    if(!hadActiveGame){
+      game.awardEvents.forEach(event=>{
+        if(event?.id) shownAwardEventIds.add(event.id);
+      });
+    }
+
+    enforceResourceIntegrity();
     showGameScreen();
     $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
     const cpuCount=game.players.filter(player=>!player.human).length;
@@ -463,6 +475,14 @@ function startOnlineGame(){
   game.online=true;
   game.roomId=onlineRoomState.roomId;
   game.pendingTrade=null;
+  game.resolvedTradeIds=[];
+  locallyResolvedTradeIds.clear();
+  game.awardEvents=[];
+  shownAwardEventIds.clear();
+  awardDisplayQueue.length=0;
+  awardDisplayActive=false;
+  clearTimeout(awardDisplayTimer);
+  awardDisplayTimer=null;
   game.discardQueue=[];
   game.discardPlayerId=null;
   game.logHistory=[];

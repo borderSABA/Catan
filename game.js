@@ -2,6 +2,7 @@
 "use strict";
 
 const RESOURCES = ["wood", "brick", "wool", "grain", "ore"];
+const TRADE_REQUEST_MAX = 19;
 const RESOURCE_JA = { wood:"木材", brick:"レンガ", wool:"羊毛", grain:"小麦", ore:"鉱石" };
 const RESOURCE_ICON = { wood:"🌲", brick:"🧱", wool:"🐑", grain:"🌾", ore:"🪨" };
 const PLAYER_COLORS = ["#e53935", "#1976d2", "#f9a825", "#7b1fa2", "#00897b", "#6d4c41"];
@@ -28,6 +29,11 @@ let discardSelection = null;
 let choiceModalState = null;
 let tradeDraft = null;
 let shownPendingTradeId = null;
+const locallyResolvedTradeIds = new Set();
+const shownAwardEventIds = new Set();
+const awardDisplayQueue = [];
+let awardDisplayActive = false;
+let awardDisplayTimer = null;
 let shownFishSwapKey = null;
 let boardRenderGeneration = 0;
 const preloadedTileImages = [];
@@ -160,6 +166,137 @@ function preloadTileImages(){
     image.src=`${TILE_IMAGE_PATH}/${resource}.webp`;
     preloadedTileImages.push(image);
   }
+}
+
+
+const AWARD_PRESENTATION = {
+  oldBoot:{
+    title:"ボロ靴をゲット！",
+    fallback:"🥾",
+    asset:"old-boot",
+  },
+  largestArmy:{
+    title:"最大騎士団",
+    fallback:"⚔️",
+    asset:"largest-army",
+  },
+  longestRoad:{
+    title:"最長交易路",
+    fallback:"🛣️",
+    asset:"longest-road",
+  },
+};
+
+function queueAwardEvent(type,playerId){
+  if(!game || !AWARD_PRESENTATION[type]) return;
+
+  const player=playerById(playerId);
+  if(!player) return;
+
+  if(!Array.isArray(game.awardEvents)){
+    game.awardEvents=[];
+  }
+
+  game.awardEvents.push({
+    id:`${type}-${playerId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    type,
+    playerId,
+    playerName:player.name,
+    playerColor:player.color,
+    createdAt:Date.now(),
+  });
+
+  game.awardEvents=game.awardEvents.slice(-24);
+}
+
+function collectAwardAnnouncements(){
+  if(!game || !Array.isArray(game.awardEvents)) return;
+
+  for(const event of game.awardEvents){
+    if(!event?.id || shownAwardEventIds.has(event.id)) continue;
+    shownAwardEventIds.add(event.id);
+    awardDisplayQueue.push(event);
+  }
+
+  playNextAwardAnnouncement();
+}
+
+function hideAwardAnnouncement(){
+  clearTimeout(awardDisplayTimer);
+  awardDisplayTimer=null;
+  $("awardAnnouncement")?.classList.add("hidden");
+  awardDisplayActive=false;
+  playNextAwardAnnouncement();
+}
+
+function playNextAwardAnnouncement(){
+  if(awardDisplayActive || !awardDisplayQueue.length) return;
+
+  const event=awardDisplayQueue.shift();
+  const meta=AWARD_PRESENTATION[event.type];
+  const overlay=$("awardAnnouncement");
+
+  if(!meta || !overlay){
+    awardDisplayActive=false;
+    playNextAwardAnnouncement();
+    return;
+  }
+
+  awardDisplayActive=true;
+
+  const card=$("awardAnnouncementCard");
+  const playerName=$("awardAnnouncementPlayer");
+  const title=$("awardAnnouncementTitle");
+  const image=$("awardAnnouncementImage");
+  const fallback=$("awardAnnouncementFallback");
+
+  card.className=`award-announcement-card type-${event.type}`;
+  card.style.borderColor=event.playerColor||"#fff";
+  playerName.textContent=
+    event.playerName||
+    playerById(event.playerId)?.name||
+    "プレイヤー";
+  title.textContent=meta.title;
+  fallback.textContent=meta.fallback;
+  fallback.classList.remove("hidden");
+
+  image.classList.add("hidden");
+  image.alt=`${meta.title}の画像`;
+
+  const candidates=[
+    `assets/awards/${meta.asset}.webp`,
+    `assets/awards/${meta.asset}.png`,
+    `assets/awards/${meta.asset}.svg`,
+  ];
+
+  let candidateIndex=0;
+
+  image.onload=()=>{
+    image.classList.remove("hidden");
+    fallback.classList.add("hidden");
+  };
+
+  image.onerror=()=>{
+    candidateIndex++;
+    if(candidateIndex<candidates.length){
+      image.src=candidates[candidateIndex];
+    }else{
+      image.classList.add("hidden");
+      fallback.classList.remove("hidden");
+    }
+  };
+
+  image.src=candidates[candidateIndex];
+  overlay.classList.remove("hidden");
+
+  card.style.animation="none";
+  void card.offsetWidth;
+  card.style.animation="";
+
+  awardDisplayTimer=setTimeout(
+    hideAwardAnnouncement,
+    2100
+  );
 }
 
 function log(msg){
@@ -330,6 +467,12 @@ function newGame(){
   cpuTimer=null;
   cpuActionRunning=false;
   cpuScheduledKey=null;
+  shownAwardEventIds.clear();
+  awardDisplayQueue.length=0;
+  awardDisplayActive=false;
+  clearTimeout(awardDisplayTimer);
+  awardDisplayTimer=null;
+  $("awardAnnouncement")?.classList.add("hidden");
   resetPopups();
   hideDiscardModal();
   closeChoiceModal();
@@ -370,6 +513,8 @@ function newGame(){
     oldBootHolder:null,
     selectedFishIndices:[],
     pendingTrade:null,
+    resolvedTradeIds:[],
+    awardEvents:[],
     discardQueue:[],
     discardPlayerId:null,
     pendingFishDraws:[],
@@ -524,6 +669,117 @@ function createBoard(playerCount,fishermen=false){
 function currentPlayer(){ return game.players[game.current]; }
 function playerById(id){ return game.players[id]; }
 function totalResources(p){ return RESOURCES.reduce((s,r)=>s+p.resources[r],0); }
+
+function expectedResourceSupply(){
+  return game?.playerCount>=5 ? 24 : 19;
+}
+
+function enforceResourceIntegrity(){
+  if(!game?.players || !game?.bank) return false;
+
+  let changed=false;
+  const expected=expectedResourceSupply();
+
+  for(const player of game.players){
+    if(!player.resources){
+      player.resources=Object.fromEntries(
+        RESOURCES.map(resource=>[resource,0])
+      );
+      changed=true;
+    }
+
+    for(const resource of RESOURCES){
+      const raw=Number(player.resources[resource]);
+      const normalized=Number.isFinite(raw)
+        ?Math.max(0,Math.floor(raw))
+        :0;
+
+      if(raw!==normalized){
+        player.resources[resource]=normalized;
+        changed=true;
+      }
+    }
+  }
+
+  for(const resource of RESOURCES){
+    const playersTotal=game.players.reduce(
+      (sum,player)=>sum+player.resources[resource],
+      0
+    );
+    const correctedBank=Math.max(0,expected-playersTotal);
+
+    if(game.bank[resource]!==correctedBank){
+      game.bank[resource]=correctedBank;
+      changed=true;
+    }
+  }
+
+  return changed;
+}
+
+function normalizedTradeAmount(value){
+  const amount=Number(value);
+  if(!Number.isInteger(amount) || amount<0) return null;
+  return amount;
+}
+
+function isTradeBundleValid(bundle){
+  if(!bundle || typeof bundle!=="object") return false;
+
+  return RESOURCES.every(resource=>{
+    const amount=normalizedTradeAmount(bundle[resource]||0);
+    return amount!==null && amount<=TRADE_REQUEST_MAX;
+  });
+}
+
+function canExecutePlayerTrade(player,target,give,get){
+  if(!player || !target || player.id===target.id) return false;
+  if(!isTradeBundleValid(give) || !isTradeBundleValid(get)) return false;
+
+  const giveTotal=RESOURCES.reduce(
+    (sum,resource)=>sum+(give[resource]||0),
+    0
+  );
+  const getTotal=RESOURCES.reduce(
+    (sum,resource)=>sum+(get[resource]||0),
+    0
+  );
+
+  if(giveTotal<=0 || getTotal<=0) return false;
+
+  for(const resource of RESOURCES){
+    const offered=give[resource]||0;
+    const requested=get[resource]||0;
+
+    if(offered>0 && requested>0) return false;
+    if(offered>player.resources[resource]) return false;
+    if(requested>target.resources[resource]) return false;
+  }
+
+  return true;
+}
+
+function tradeWasResolved(tradeId){
+  if(!tradeId) return false;
+
+  return locallyResolvedTradeIds.has(tradeId) ||
+    !!game?.resolvedTradeIds?.includes(tradeId);
+}
+
+function rememberResolvedTrade(tradeId){
+  if(!tradeId) return;
+
+  locallyResolvedTradeIds.add(tradeId);
+
+  if(!Array.isArray(game.resolvedTradeIds)){
+    game.resolvedTradeIds=[];
+  }
+
+  if(!game.resolvedTradeIds.includes(tradeId)){
+    game.resolvedTradeIds.push(tradeId);
+    game.resolvedTradeIds=game.resolvedTradeIds.slice(-50);
+  }
+}
 function hasCost(p,cost){ return Object.entries(cost).every(([r,n])=>p.resources[r]>=n); }
 function payCost(p,cost,reason="支払い"){
   const delta={};
@@ -773,6 +1029,7 @@ function drawRawFishToken(){
 function receiveFishToken(player,token,reason){
   if(token==="boot"){
     game.oldBootHolder=player.id;
+    queueAwardEvent("oldBoot",player.id);
     log(`${player.name}がボロ靴を引き、即座に公開しました。勝利に必要な点数が1点増えます。`);
   }else{
     player.fishTokens.push(token);
@@ -1319,34 +1576,62 @@ function tradeResourceText(counts){
 
 function changeTradeQuantity(side,resource,delta){
   if(!tradeDraft) return;
+
   const player=localPlayer();
   const target=playerById(tradeDraft.targetId);
-  if(!target) return;
+  if(!player || !target) return;
+
   const counts=tradeDraft[side];
   const opposite=tradeDraft[side==="give"?"get":"give"];
-  const targetIsOnlineHuman=ONLINE_MODE&&side==="get"&&target.human;
-  const stock=side==="give"
-    ? player.resources[resource]
-    : (targetIsOnlineHuman?totalResources(target):target.resources[resource]);
-  const next=Math.max(0,Math.min(stock,counts[resource]+delta));
-  counts[resource]=next;
-  if(next>0) opposite[resource]=0;
+  const maximum=side==="give"
+    ?Math.max(0,player.resources[resource])
+    :TRADE_REQUEST_MAX;
+
+  counts[resource]=Math.max(
+    0,
+    Math.min(maximum,counts[resource]+delta)
+  );
+
+  if(counts[resource]>0){
+    opposite[resource]=0;
+  }
+
   renderTradeModal();
 }
 
 function renderTradeResourceEditor(containerId,side,owner){
   const counts=tradeDraft[side];
-  const hideStock=ONLINE_MODE&&side==="get"&&owner.human;
+  const isRequestSide=side==="get";
+
   $(containerId).innerHTML=RESOURCES.map(resource=>{
-    const maximum=hideStock?totalResources(owner):owner.resources[resource];
+    const maximum=isRequestSide
+      ?TRADE_REQUEST_MAX
+      :Math.max(0,owner.resources[resource]);
+
+    const stockText=isRequestSide
+      ?"相手の所持数は非公開"
+      :`所持 ${Math.max(0,owner.resources[resource])}枚`;
+
     return `<div class="trade-resource-line">
       <div>
         <span class="trade-resource-name">${RESOURCE_ICON[resource]} ${RESOURCE_JA[resource]}</span>
-        <span class="trade-resource-stock">${hideStock?"内訳は非公開":`所持 ${owner.resources[resource]}枚`}</span>
+        <span class="trade-resource-stock">${stockText}</span>
       </div>
-      <button class="trade-qty-button" data-trade-side="${side}" data-trade-resource="${resource}" data-trade-delta="-1" ${counts[resource]<=0?"disabled":""}>−</button>
+      <button
+        class="trade-qty-button"
+        data-trade-side="${side}"
+        data-trade-resource="${resource}"
+        data-trade-delta="-1"
+        ${counts[resource]<=0?"disabled":""}
+      >−</button>
       <span class="trade-resource-count">${counts[resource]}</span>
-      <button class="trade-qty-button" data-trade-side="${side}" data-trade-resource="${resource}" data-trade-delta="1" ${counts[resource]>=maximum?"disabled":""}>＋</button>
+      <button
+        class="trade-qty-button"
+        data-trade-side="${side}"
+        data-trade-resource="${resource}"
+        data-trade-delta="1"
+        ${counts[resource]>=maximum?"disabled":""}
+      >＋</button>
     </div>`;
   }).join("");
 }
@@ -1361,16 +1646,11 @@ function renderTradeModal(){
   $("tradePlayerChoices").innerHTML=targets.map(other=>`
     <button class="trade-player-choice ${other.id===tradeDraft.targetId?"selected":""}" data-trade-player="${other.id}">
       <span class="player-dot" style="background:${other.color}"></span>
-      <span>${other.name}<br><small>資源 ${totalResources(other)}枚</small></span>
+      <span>${other.name}<br><small>資源カード合計 ${Math.max(0,totalResources(other))}枚（内訳非公開）</small></span>
     </button>
   `).join("");
 
   if(!target) return;
-  if(!(ONLINE_MODE&&target.human)){
-    for(const resource of RESOURCES){
-      tradeDraft.get[resource]=Math.min(tradeDraft.get[resource],target.resources[resource]);
-    }
-  }
   renderTradeResourceEditor("tradeOfferEditor","give",player);
   renderTradeResourceEditor("tradeRequestEditor","get",target);
 
@@ -1426,29 +1706,69 @@ function cpuAcceptTrade(cpu,give,get){
   return false;
 }
 
-function executePlayerTrade(target,give,get,player=localPlayer()){
+function executePlayerTrade(
+  target,
+  give,
+  get,
+  player=localPlayer(),
+  tradeId=null
+){
+  enforceResourceIntegrity();
+
+  if(tradeId && tradeWasResolved(tradeId)){
+    return false;
+  }
+
+  if(!canExecutePlayerTrade(player,target,give,get)){
+    return false;
+  }
+
+  if(tradeId){
+    rememberResolvedTrade(tradeId);
+  }
+
   const playerDelta={};
   const targetDelta={};
+
   for(const resource of RESOURCES){
     const offered=give[resource]||0;
     const requested=get[resource]||0;
-    if(offered){
+
+    if(offered>0){
       player.resources[resource]-=offered;
       target.resources[resource]+=offered;
       playerDelta[resource]=(playerDelta[resource]||0)-offered;
       targetDelta[resource]=(targetDelta[resource]||0)+offered;
     }
-    if(requested){
+
+    if(requested>0){
       target.resources[resource]-=requested;
       player.resources[resource]+=requested;
       targetDelta[resource]=(targetDelta[resource]||0)-requested;
       playerDelta[resource]=(playerDelta[resource]||0)+requested;
     }
   }
-  showResourceDelta(player.id,playerDelta,"プレイヤー交易");
-  showResourceDelta(target.id,targetDelta,"プレイヤー交易");
-  log(`${target.name}が交易を承諾しました。渡した資源：${tradeResourceText(give)}／受け取った資源：${tradeResourceText(get)}`);
-  render();
+
+  enforceResourceIntegrity();
+
+  showResourceDelta(
+    player.id,
+    playerDelta,
+    "プレイヤー交易"
+  );
+  showResourceDelta(
+    target.id,
+    targetDelta,
+    "プレイヤー交易"
+  );
+
+  log(
+    `${target.name}が交易を承諾しました。`+
+    `渡した資源：${tradeResourceText(give)}／`+
+    `受け取った資源：${tradeResourceText(get)}`
+  );
+
+  return true;
 }
 
 function submitPlayerTrade(){
@@ -1460,11 +1780,6 @@ function submitPlayerTrade(){
   for(const resource of RESOURCES){
     if(tradeDraft.give[resource]>player.resources[resource]){
       log("渡す資源が不足しています。");
-      renderTradeModal();
-      return;
-    }
-    if(!(ONLINE_MODE&&target.human) && tradeDraft.get[resource]>target.resources[resource]){
-      log(`${target.name}の資源が不足しています。`);
       renderTradeModal();
       return;
     }
@@ -1487,9 +1802,15 @@ function submitPlayerTrade(){
     return;
   }
 
-  const accepted=cpuAcceptTrade(target,give,get);
-  if(accepted) executePlayerTrade(target,give,get,player);
-  else log(`${target.name}が交易を断りました。`);
+  const cpuWantedToAccept=cpuAcceptTrade(target,give,get);
+  const accepted=cpuWantedToAccept &&
+    executePlayerTrade(target,give,get,player);
+
+  if(!accepted){
+    log(`${target.name}が交易を断りました。`);
+  }
+
+  render();
 
   openChoiceModal({
     title:`${target.name}の回答`,
@@ -1667,6 +1988,7 @@ function transferOldBoot(fromId,toId){
   const from=playerById(fromId),to=playerById(toId);
   if(!to || publicVP(to)<publicVP(from)) return false;
   game.oldBootHolder=toId;
+  queueAwardEvent("oldBoot",toId);
   log(`${from.name}がボロ靴を${to.name}へ渡しました。`);
   checkVictory(); render(); return true;
 }
@@ -2170,20 +2492,86 @@ function calculateLongestRoad(playerId){
   return best;
 }
 function updateAwards(){
-  game.players.forEach(p=>p.longestRoad=calculateLongestRoad(p.id));
-  const lrMax=Math.max(...game.players.map(p=>p.longestRoad));
-  const lrLeaders=game.players.filter(p=>p.longestRoad===lrMax && lrMax>=5);
-  let currentLR=game.players.find(p=>p.hasLongestRoad);
-  game.players.forEach(p=>p.hasLongestRoad=false);
-  if(lrLeaders.length===1) lrLeaders[0].hasLongestRoad=true;
-  else if(currentLR && lrLeaders.includes(currentLR)) currentLR.hasLongestRoad=true;
+  const previousLongestRoadHolder=
+    game.players.find(player=>player.hasLongestRoad)?.id??null;
+  const previousLargestArmyHolder=
+    game.players.find(player=>player.hasLargestArmy)?.id??null;
 
-  const kaMax=Math.max(...game.players.map(p=>p.knightsPlayed));
-  const kaLeaders=game.players.filter(p=>p.knightsPlayed===kaMax && kaMax>=3);
-  let currentKA=game.players.find(p=>p.hasLargestArmy);
-  game.players.forEach(p=>p.hasLargestArmy=false);
-  if(kaLeaders.length===1) kaLeaders[0].hasLargestArmy=true;
-  else if(currentKA && kaLeaders.includes(currentKA)) currentKA.hasLargestArmy=true;
+  game.players.forEach(
+    player=>player.longestRoad=calculateLongestRoad(player.id)
+  );
+
+  const longestRoadMaximum=Math.max(
+    ...game.players.map(player=>player.longestRoad)
+  );
+  const longestRoadLeaders=game.players.filter(
+    player=>
+      player.longestRoad===longestRoadMaximum &&
+      longestRoadMaximum>=5
+  );
+  const previousLongestRoadPlayer=
+    previousLongestRoadHolder===null
+      ?null
+      :playerById(previousLongestRoadHolder);
+
+  game.players.forEach(
+    player=>player.hasLongestRoad=false
+  );
+
+  if(longestRoadLeaders.length===1){
+    longestRoadLeaders[0].hasLongestRoad=true;
+  }else if(
+    previousLongestRoadPlayer &&
+    longestRoadLeaders.includes(previousLongestRoadPlayer)
+  ){
+    previousLongestRoadPlayer.hasLongestRoad=true;
+  }
+
+  const newLongestRoadHolder=
+    game.players.find(player=>player.hasLongestRoad)?.id??null;
+
+  const largestArmyMaximum=Math.max(
+    ...game.players.map(player=>player.knightsPlayed)
+  );
+  const largestArmyLeaders=game.players.filter(
+    player=>
+      player.knightsPlayed===largestArmyMaximum &&
+      largestArmyMaximum>=3
+  );
+  const previousLargestArmyPlayer=
+    previousLargestArmyHolder===null
+      ?null
+      :playerById(previousLargestArmyHolder);
+
+  game.players.forEach(
+    player=>player.hasLargestArmy=false
+  );
+
+  if(largestArmyLeaders.length===1){
+    largestArmyLeaders[0].hasLargestArmy=true;
+  }else if(
+    previousLargestArmyPlayer &&
+    largestArmyLeaders.includes(previousLargestArmyPlayer)
+  ){
+    previousLargestArmyPlayer.hasLargestArmy=true;
+  }
+
+  const newLargestArmyHolder=
+    game.players.find(player=>player.hasLargestArmy)?.id??null;
+
+  if(
+    newLongestRoadHolder!==null &&
+    newLongestRoadHolder!==previousLongestRoadHolder
+  ){
+    queueAwardEvent("longestRoad",newLongestRoadHolder);
+  }
+
+  if(
+    newLargestArmyHolder!==null &&
+    newLargestArmyHolder!==previousLargestArmyHolder
+  ){
+    queueAwardEvent("largestArmy",newLargestArmyHolder);
+  }
 }
 function visibleVP(p){
   return p.settlements.length + p.cities.length*2 + (p.hasLongestRoad?2:0) + (p.hasLargestArmy?2:0);
@@ -2204,9 +2592,11 @@ function checkVictory(){
 
 function render(){
   if(!game) return;
+  enforceResourceIntegrity();
   renderBoard();
   renderSide();
   renderLog();
+  collectAwardAnnouncements();
   onlineAfterRender();
 }
 
@@ -2441,22 +2831,62 @@ function renderBoard(){
 
 function resolveOnlineTrade(accepted){
   const trade=game?.pendingTrade;
-  if(!trade || trade.toId!==localPlayerId()) return;
+
+  if(!trade || trade.toId!==localPlayerId()){
+    return;
+  }
+
+  if(tradeWasResolved(trade.id)){
+    game.pendingTrade=null;
+    shownPendingTradeId=null;
+    closeChoiceModal();
+    render();
+    return;
+  }
+
   const from=playerById(trade.fromId);
   const to=playerById(trade.toId);
-  let valid=true;
-  for(const resource of RESOURCES){
-    if((trade.give[resource]||0)>from.resources[resource]) valid=false;
-    if((trade.get[resource]||0)>to.resources[resource]) valid=false;
-  }
-  if(accepted && valid){
-    executePlayerTrade(to,trade.give,trade.get,from);
-    log(`${to.name}が${from.name}からの交易提案にYESと回答しました。`);
-  }else{
-    log(`${to.name}が${from.name}からの交易提案にNOと回答しました。`);
-  }
+  const valid=canExecutePlayerTrade(
+    from,
+    to,
+    trade.give,
+    trade.get
+  );
+
   game.pendingTrade=null;
   shownPendingTradeId=null;
+
+  let completed=false;
+
+  if(accepted && valid){
+    completed=executePlayerTrade(
+      to,
+      trade.give,
+      trade.get,
+      from,
+      trade.id
+    );
+  }else{
+    rememberResolvedTrade(trade.id);
+  }
+
+  if(completed){
+    log(
+      `${to.name}が${from.name}からの交易提案に`+
+      `YESと回答しました。`
+    );
+  }else if(accepted && !valid){
+    log(
+      `${to.name}は要求された資源を持っていないため、`+
+      `交易を承諾できませんでした。`
+    );
+  }else{
+    log(
+      `${to.name}が${from.name}からの交易提案に`+
+      `NOと回答しました。`
+    );
+  }
+
   closeChoiceModal();
   render();
 }
@@ -2477,19 +2907,55 @@ function handleOnlinePendingUI(){
   }
 
   const trade=game.pendingTrade;
+
   if(!trade){
     shownPendingTradeId=null;
     return;
   }
+
+  if(tradeWasResolved(trade.id)){
+    game.pendingTrade=null;
+    shownPendingTradeId=null;
+    render();
+    return;
+  }
+
   if(trade.toId===local.id && shownPendingTradeId!==trade.id){
     shownPendingTradeId=trade.id;
+
     const from=playerById(trade.fromId);
+    const canAccept=canExecutePlayerTrade(
+      from,
+      local,
+      trade.give,
+      trade.get
+    );
+
+    const guide=
+      `受け取る：${tradeResourceText(trade.give)} ／ `+
+      `渡す：${tradeResourceText(trade.get)}`+
+      (canAccept
+        ?""
+        :"／要求された資源が不足しているためYESは選べません。");
+
     openChoiceModal({
       title:`${from.name}から交易提案`,
-      guide:`受け取る：${tradeResourceText(trade.give)} ／ 渡す：${tradeResourceText(trade.get)}`,
+      guide,
       options:[
-        {value:true,label:"YES",icon:"✓",className:"yes"},
-        {value:false,label:"NO",icon:"×",className:"no"},
+        {
+          value:true,
+          label:"YES",
+          icon:"✓",
+          className:"yes",
+          disabled:!canAccept,
+          sub:canAccept?"交易を成立させる":"必要な資源が不足",
+        },
+        {
+          value:false,
+          label:"NO",
+          icon:"×",
+          className:"no",
+        },
       ],
       allowCancel:false,
       onSelect:accepted=>{

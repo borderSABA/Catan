@@ -1,0 +1,13 @@
+獲得演出画像の差し替え名
+
+ボロ靴：
+old-boot.webp / old-boot.png / old-boot.svg
+
+最大騎士団：
+largest-army.webp / largest-army.png / largest-army.svg
+
+最長交易路：
+longest-road.webp / longest-road.png / longest-road.svg
+
+読み込み優先順位は webp → png → svg です。
+推奨サイズは512×512pxの正方形です。

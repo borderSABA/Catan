@@ -799,3 +799,159 @@ body.online-game-mode {
   font-weight: 800;
   line-height: 1.35;
 }
+
+
+/* v1.12：交易画面で相手の資源内訳を非公開 */
+.trade-editor.request .trade-resource-stock {
+  color: #64748b;
+  font-style: italic;
+}
+
+.trade-player-choice small {
+  color: #64748b;
+}
+
+.choice-option:disabled {
+  cursor: not-allowed;
+  filter: grayscale(.3);
+}
+
+
+/* v1.13：ボロ靴・最大騎士団・最長交易路の獲得演出 */
+.award-announcement {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+  background: rgba(2, 12, 27, .42);
+  backdrop-filter: blur(3px);
+}
+
+.award-announcement.hidden {
+  display: none !important;
+}
+
+.award-announcement-card {
+  width: min(560px, 90vw);
+  padding: 24px 28px 27px;
+  border: 4px solid rgba(255,255,255,.92);
+  border-radius: 25px;
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,255,255,.28), transparent 45%),
+    linear-gradient(145deg, #173d57, #0f2638);
+  color: #fff;
+  text-align: center;
+  box-shadow:
+    0 30px 90px rgba(0,0,0,.58),
+    inset 0 0 38px rgba(255,255,255,.08);
+  animation: awardAnnouncementIn 2.05s ease both;
+}
+
+.award-announcement-player {
+  min-height: 39px;
+  font-size: clamp(23px, 3vw, 34px);
+  font-weight: 900;
+  letter-spacing: .03em;
+  text-shadow: 0 3px 8px rgba(0,0,0,.45);
+}
+
+.award-announcement-image-box {
+  display: grid;
+  place-items: center;
+  width: 215px;
+  height: 215px;
+  margin: 12px auto 15px;
+  overflow: hidden;
+  border: 4px solid rgba(255,255,255,.9);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle, rgba(255,255,255,.22), transparent 67%),
+    rgba(255,255,255,.08);
+  box-shadow: 0 12px 35px rgba(0,0,0,.38);
+}
+
+.award-announcement-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 15px;
+  object-fit: contain;
+}
+
+.award-announcement-image.hidden,
+.award-announcement-fallback.hidden {
+  display: none !important;
+}
+
+.award-announcement-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: 112px;
+  line-height: 1;
+}
+
+.award-announcement-title {
+  font-size: clamp(27px, 4vw, 43px);
+  font-weight: 1000;
+  letter-spacing: .05em;
+  text-shadow:
+    0 4px 10px rgba(0,0,0,.58),
+    0 0 20px rgba(255,255,255,.2);
+}
+
+.award-announcement-card.type-oldBoot {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,238,196,.25), transparent 45%),
+    linear-gradient(145deg, #5d3d1f, #25160b);
+}
+
+.award-announcement-card.type-largestArmy {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(210,231,255,.3), transparent 45%),
+    linear-gradient(145deg, #263d67, #111c32);
+}
+
+.award-announcement-card.type-longestRoad {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,236,145,.28), transparent 45%),
+    linear-gradient(145deg, #765410, #2f2108);
+}
+
+@keyframes awardAnnouncementIn {
+  0% {
+    opacity: 0;
+    transform: scale(.72) translateY(32px);
+  }
+  13% {
+    opacity: 1;
+    transform: scale(1.04) translateY(0);
+  }
+  22%, 76% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(.96) translateY(-15px);
+  }
+}
+
+@media(max-width: 600px) {
+  .award-announcement-card {
+    padding: 20px 18px 23px;
+  }
+
+  .award-announcement-image-box {
+    width: 170px;
+    height: 170px;
+  }
+
+  .award-announcement-fallback {
+    font-size: 88px;
+  }
+}

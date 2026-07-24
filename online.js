@@ -45,7 +45,22 @@ function isOnlineHost(){
   return onlineRoomState?.hostId===ONLINE_CLIENT_ID;
 }
 function scheduleCpuIfNeeded(){
-  if(!game || currentPlayer().human) return;
+  if(!game || game.winner || !currentPlayer()){
+    clearTimeout(cpuTimer);
+    cpuTimer=null;
+    cpuScheduledKey=null;
+    return;
+  }
+
+  if(currentPlayer().human){
+    clearTimeout(cpuTimer);
+    cpuTimer=null;
+    cpuScheduledKey=null;
+    cpuActionRunning=false;
+    return;
+  }
+
+  if(game.diceRolling || cpuActionRunning) return;
   if(!ONLINE_MODE || isOnlineHost()) scheduleCpu();
 }
 
@@ -98,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.8");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.9");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -173,7 +188,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.8";
+const APP_VERSION="v1.9";
 
 function setScreenElement(element,visible,displayValue){
   if(!element) return;
@@ -222,6 +237,14 @@ function receiveRoomState(state){
     $("onlineGameSubtitle").textContent=`${game.playerCount}人用${cpuCount?`・CPU${cpuCount}人`:""}${game.fishermen?"・漁師拡張":""}`;
     render();
     applyingRemoteState=false;
+
+    if(currentPlayer()?.human){
+      clearTimeout(cpuTimer);
+      cpuTimer=null;
+      cpuScheduledKey=null;
+      cpuActionRunning=false;
+    }
+
     handleOnlinePendingUI();
     scheduleCpuIfNeeded();
   }else{

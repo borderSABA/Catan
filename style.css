@@ -712,3 +712,9 @@ body.online-game-mode {
   background: #dbeafe;
   color: #1e3a8a;
 }
+
+
+/* v1.9：人間の手番ではCPU自動操作を完全停止 */
+.cpu-fill-note {
+  line-height: 1.45;
+}

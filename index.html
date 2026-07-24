@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.8（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.8">
+  <title>カタン オンライン v1.9（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.9">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.8</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.9</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -54,9 +54,9 @@
               <input type="checkbox" id="fishermenEnabled" checked> 漁師拡張
             </label>
             <label class="expansion-toggle cpu-fill-toggle">
-              <input type="checkbox" id="cpuFillEnabled"> 不足席をCPUで埋める（確認用）
+              <input type="checkbox" id="cpuFillEnabled" checked> CPU参加（不足席をCPUで埋める）
             </label>
-            <p class="cpu-fill-note">例：3人戦で人間1人なら、CPU2人を追加します。</p>
+            <p class="cpu-fill-note">人間1人でも開始できます。自分の席は必ず人間操作のままです。</p>
             <p id="startRequirement" class="start-requirement"></p>
             <button id="startOnlineGameBtn">ゲーム開始</button>
             <button id="resetLobbyRoomBtn" class="secondary">部屋を初期化</button>
@@ -68,7 +68,7 @@
 
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.8</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.9</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
@@ -213,8 +213,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.8"></script>
-  <script src="online.js?version=v1.8"></script>
-  <script src="game.js?version=v1.8"></script>
+  <script src="config.js?version=v1.9"></script>
+  <script src="online.js?version=v1.9"></script>
+  <script src="game.js?version=v1.9"></script>
 </body>
 </html>

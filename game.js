@@ -21,6 +21,8 @@ const $ = (id) => document.getElementById(id);
 
 let game = null;
 let cpuTimer = null;
+let cpuActionRunning = false;
+let cpuScheduledKey = null;
 let discardQueue = [];
 let discardSelection = null;
 let choiceModalState = null;
@@ -305,6 +307,9 @@ function createFishSupply(large){
 
 function newGame(){
   clearTimeout(cpuTimer);
+  cpuTimer=null;
+  cpuActionRunning=false;
+  cpuScheduledKey=null;
   resetPopups();
   hideDiscardModal();
   closeChoiceModal();
@@ -352,6 +357,7 @@ function newGame(){
     logHistory:[],
     winner:null,
     pendingAfterRobber:null,
+    pendingCpuBuildAfterRobber:false,
     turnNo:0,
     turnSerial:1,
   };
@@ -621,6 +627,10 @@ function advanceSetup(){
     game.phase="turn";
     game.rolled=false;
     game.turnNo=1;
+    cpuActionRunning=false;
+    clearTimeout(cpuTimer);
+    cpuTimer=null;
+    cpuScheduledKey=null;
     log("初期配置が完了しました。ゲームを開始します。");
     render();
     scheduleCpuIfNeeded();
@@ -628,7 +638,19 @@ function advanceSetup(){
   }
   game.current=game.setupOrder[game.setupIndex];
   game.setupRound=game.setupIndex<game.playerCount?1:2;
-  game.phase="setupSettlement"; game.setupVertex=null;
+  game.phase="setupSettlement";
+  game.setupVertex=null;
+
+  if(currentPlayer().human){
+    cpuActionRunning=false;
+    clearTimeout(cpuTimer);
+    cpuTimer=null;
+    cpuScheduledKey=null;
+    if(isLocalPlayer(currentPlayer())){
+      log(`あなたの初期配置 ${game.setupRound}/2 です。開拓地を置いてください。`);
+    }
+  }
+
   render();
   scheduleCpuIfNeeded();
 }
@@ -1045,6 +1067,8 @@ function handleSeven(playerId,afterResolve=null){
   game.robberMover=playerId;
   game.robberAfterKnight=false;
   game.pendingAfterRobber=typeof afterResolve==="function"?afterResolve:null;
+  game.pendingCpuBuildAfterRobber=
+    typeof afterResolve==="function" && !playerById(playerId).human;
   game.discardQueue=game.players.filter(p=>totalResources(p)>7).map(p=>p.id);
   game.discardPlayerId=null;
   if(game.discardQueue.length){
@@ -1068,10 +1092,27 @@ function beginRobberMove(){
 function finishRobberMove(playerId,victimId=null){
   if(victimId!==null) stealRandom(playerId,victimId);
   game.phase="turn";
-  render();
   const continuation=game.pendingAfterRobber;
+  const resumeCpuBuild=!!game.pendingCpuBuildAfterRobber;
   game.pendingAfterRobber=null;
-  if(typeof continuation==="function" && !game.winner) setTimeout(continuation,280);
+  game.pendingCpuBuildAfterRobber=false;
+  render();
+
+  if(game.winner){
+    cpuActionRunning=false;
+    return;
+  }
+
+  if(typeof continuation==="function"){
+    setTimeout(continuation,280);
+  }else if(
+    resumeCpuBuild &&
+    game.current===playerId &&
+    !playerById(playerId).human &&
+    (!ONLINE_MODE || isOnlineHost())
+  ){
+    setTimeout(()=>cpuBuildPhase(playerById(playerId)),280);
+  }
 }
 
 function moveRobberTo(hexId,playerId){
@@ -1783,6 +1824,10 @@ function resetActivePlayerState(p){
 }
 
 function finishActivePhase(){
+  cpuActionRunning=false;
+  clearTimeout(cpuTimer);
+  cpuTimer=null;
+  cpuScheduledKey=null;
   const old=currentPlayer();
   resetActivePlayerState(old);
   const nextPlayer=(game.current+1)%game.playerCount;
@@ -1802,17 +1847,85 @@ function nextTurn(){
 
 function scheduleCpu(){
   if(ONLINE_MODE && !isOnlineHost()) return;
-  cpuTimer=setTimeout(cpuAct,450);
+
+  clearTimeout(cpuTimer);
+  cpuTimer=null;
+
+  if(
+    !game ||
+    game.winner ||
+    !currentPlayer() ||
+    currentPlayer().human ||
+    game.diceRolling ||
+    cpuActionRunning
+  ){
+    cpuScheduledKey=null;
+    return;
+  }
+
+  const scheduledKey=[
+    game.current,
+    game.phase,
+    game.setupIndex,
+    game.turnSerial,
+    game.rolled?1:0,
+  ].join(":");
+  cpuScheduledKey=scheduledKey;
+
+  cpuTimer=setTimeout(()=>{
+    cpuTimer=null;
+
+    if(
+      !game ||
+      game.winner ||
+      !currentPlayer() ||
+      currentPlayer().human ||
+      game.diceRolling ||
+      cpuActionRunning
+    ){
+      cpuScheduledKey=null;
+      return;
+    }
+
+    const currentKey=[
+      game.current,
+      game.phase,
+      game.setupIndex,
+      game.turnSerial,
+      game.rolled?1:0,
+    ].join(":");
+
+    if(currentKey!==scheduledKey || cpuScheduledKey!==scheduledKey){
+      return;
+    }
+
+    cpuScheduledKey=null;
+    cpuAct();
+  },450);
 }
 
 function cpuAct(){
-  if(game.winner) return;
+  if(!game || game.winner){
+    cpuActionRunning=false;
+    return;
+  }
+
   const p=currentPlayer();
+  if(!p || p.human){
+    cpuActionRunning=false;
+    clearTimeout(cpuTimer);
+    cpuTimer=null;
+    cpuScheduledKey=null;
+    return;
+  }
+
   if(game.phase==="setupSettlement"){
     const v=bestSetupVertex(p.id);
     placeSettlement(p.id,v,true); game.setupVertex=v; game.phase="setupRoad";
     log(`${p.name}が初期開拓地を置きました。`);
-    render(); scheduleCpu(); return;
+    render();
+    scheduleCpuIfNeeded();
+    return;
   }
   if(game.phase==="setupRoad"){
     const options=game.board.vertices[game.setupVertex].edges.filter(e=>canPlaceRoad(p.id,e,game.setupVertex));
@@ -1827,7 +1940,13 @@ function cpuAct(){
     cpuTimer=setTimeout(()=>cpuBuildPhase(p),300);
     return;
   }
-  if(game.phase!=="turn") return;
+  if(game.phase!=="turn"){
+    cpuActionRunning=false;
+    return;
+  }
+
+  cpuActionRunning=true;
+
   if(game.fishermen){
     cpuTransferBoot(p);
     if(game.winner) return;
@@ -1840,7 +1959,11 @@ function cpuBuildPhase(p){
 
   cpuUseFish(p);
   checkVictory();
-  if(game.winner){ render(); return; }
+  if(game.winner){
+    cpuActionRunning=false;
+    render();
+    return;
+  }
 
   // 発展カードは購入ターンを含め、1ターンに何枚でも使用可能
   const vpCount=usableDevCount(p,"vp");
@@ -1851,7 +1974,11 @@ function cpuBuildPhase(p){
     } else if(Math.random()<.22){
       cpuPlayVictoryPoint(p);
     }
-    if(game.winner){ render(); return; }
+    if(game.winner){
+      cpuActionRunning=false;
+      render();
+      return;
+    }
   }
 
   // 騎士使用後は再びこの処理へ戻るため、続けて複数枚使用することもある
@@ -1901,7 +2028,19 @@ function cpuBuildPhase(p){
   updateAwards();
   checkVictory();
   render();
-  if(!game.winner) cpuTimer=setTimeout(finishActivePhase,450);
+  if(!game.winner){
+    clearTimeout(cpuTimer);
+    cpuTimer=setTimeout(()=>{
+      cpuTimer=null;
+      if(!game || game.winner || game.current!==p.id || p.human){
+        cpuActionRunning=false;
+        return;
+      }
+      finishActivePhase();
+    },450);
+  }else{
+    cpuActionRunning=false;
+  }
 }
 
 function cpuHasBuildOption(p){
@@ -1951,7 +2090,15 @@ function cpuPlayKnight(p){
   game.phase="moveRobber"; game.robberMover=p.id;
   cpuMoveRobber(p.id);
   render();
-  cpuTimer=setTimeout(()=>cpuBuildPhase(p),300);
+  clearTimeout(cpuTimer);
+  cpuTimer=setTimeout(()=>{
+    cpuTimer=null;
+    if(!game || game.winner || game.current!==p.id || p.human){
+      cpuActionRunning=false;
+      return;
+    }
+    cpuBuildPhase(p);
+  },300);
 }
 function usableDevCount(p,card){
   return p.dev.filter(c=>c===card).length;

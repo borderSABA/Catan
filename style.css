@@ -664,3 +664,24 @@ button.active { outline: 3px solid #f59e0b; }
   font-size: 11px;
   font-weight: 900;
 }
+
+
+/* v1.7 表示画面切替
+   オンラインロビーの display:grid が hidden を上書きしないようにする */
+.hidden {
+  display: none !important;
+}
+
+body.online-lobby-mode {
+  overflow: auto;
+}
+
+body.online-game-mode {
+  overflow: hidden;
+}
+
+@media(max-width: 1050px), (max-height: 850px) {
+  body.online-game-mode {
+    overflow: auto;
+  }
+}

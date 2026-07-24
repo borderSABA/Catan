@@ -173,6 +173,22 @@ function joinOnlineRoom(roomId){
   });
 }
 
+function showLobbyScreen(){
+  document.body.classList.add("online-lobby-mode");
+  document.body.classList.remove("online-game-mode");
+  showLobbyScreen();
+  window.scrollTo({top:0,left:0,behavior:"auto"});
+}
+
+function showGameScreen(){
+  document.body.classList.remove("online-lobby-mode");
+  document.body.classList.add("online-game-mode");
+  $("onlineLobby").classList.add("hidden");
+  $("gameHeader").classList.remove("hidden");
+  $("gameMain").classList.remove("hidden");
+  window.scrollTo({top:0,left:0,behavior:"auto"});
+}
+
 function receiveRoomState(state){
   onlineRoomState=state;
   onlineRoomId=state.roomId;
@@ -183,9 +199,7 @@ function receiveRoomState(state){
     if(!Array.isArray(game.logHistory)) game.logHistory=[];
     if(!Array.isArray(game.discardQueue)) game.discardQueue=[];
     if(!Array.isArray(game.pendingFishDraws)) game.pendingFishDraws=[];
-    $("onlineLobby").classList.add("hidden");
-    $("gameHeader").classList.remove("hidden");
-    $("gameMain").classList.remove("hidden");
+    showGameScreen();
     $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
     const cpuCount=game.players.filter(player=>!player.human).length;
     $("onlineGameSubtitle").textContent=`${game.playerCount}人用${cpuCount?`・CPU${cpuCount}人`:""}${game.fishermen?"・漁師拡張":""}`;
@@ -198,9 +212,7 @@ function receiveRoomState(state){
     closeChoiceModal();
     closeTradeModal();
     hideDiscardModal();
-    $("onlineLobby").classList.remove("hidden");
-    $("gameHeader").classList.add("hidden");
-    $("gameMain").classList.add("hidden");
+    showLobbyScreen();
   }
 }
 
@@ -350,6 +362,7 @@ function resetOnlineRoom(){
 }
 
 function initOnlineApp(){
+  showLobbyScreen();
   const savedName=localStorage.getItem(ONLINE_STORAGE.name)||"";
   $("onlinePlayerName").value=savedName;
   $("refreshRoomsBtn").addEventListener("click",fetchRoomSummaries);

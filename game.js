@@ -781,6 +781,39 @@ function rememberResolvedTrade(tradeId){
   }
 }
 function hasCost(p,cost){ return Object.entries(cost).every(([r,n])=>p.resources[r]>=n); }
+
+function missingCostItems(player,cost){
+  return Object.entries(cost)
+    .map(([resource,needed])=>({
+      resource,
+      needed,
+      owned:Math.max(0,player.resources[resource]||0),
+    }))
+    .filter(item=>item.owned<item.needed);
+}
+
+function missingCostText(player,cost){
+  const missing=missingCostItems(player,cost);
+  if(!missing.length) return "";
+  return missing
+    .map(item=>
+      `${RESOURCE_JA[item.resource]}があと${item.needed-item.owned}枚`
+    )
+    .join("、");
+}
+
+function grantFreeDevelopmentCard(player,reason="無料発展カード"){
+  if(!game.devDeck.length) return false;
+
+  // 無料取得の前後で通常建設回数を必ず維持する。
+  const builtStateBefore=player.builtThisTurn;
+  const card=game.devDeck.pop();
+  player.dev.push(card);
+  player.builtThisTurn=builtStateBefore;
+
+  log(`${reason}で発展カードを1枚引きました（通常建設回数は消費しません）。`);
+  return true;
+}
 function payCost(p,cost,reason="支払い"){
   const delta={};
   for(const [r,n] of Object.entries(cost)){
@@ -869,7 +902,7 @@ function placeCity(playerId,vertexId){
 
 function buyDev(playerId){
   const p=playerById(playerId);
-  if(!game.devDeck.length) return false;
+  if(!p || !game.devDeck.length || !hasCost(p,COST.dev)) return false;
   payCost(p,COST.dev,"発展カード");
   const card=game.devDeck.pop();
   p.dev.push(card);
@@ -1464,7 +1497,14 @@ function setBuildMode(mode){
   } else if(mode==="city"){
     if(p.pieces.city<=0 || !hasCost(p,COST.city)){ log("都市を建てる資源または駒が足りません。"); return; }
   } else if(mode==="dev"){
-    if(!hasCost(p,COST.dev) || !game.devDeck.length){ log("発展カードを買えません。"); return; }
+    if(!game.devDeck.length){
+      log("発展カードを買えません。発展カードの山札が空です。");
+      return;
+    }
+    if(!hasCost(p,COST.dev)){
+      log(`発展カードを買えません。不足：${missingCostText(p,COST.dev)}`);
+      return;
+    }
     buyDev(p.id); checkVictory(); render(); return;
   }
   game.buildMode=mode; render();
@@ -1903,9 +1943,7 @@ function executeFishAction(action,target,payment){
     game.buildMode="road";
     log("無料で置く街道の場所を選んでください。");
   }else if(action==="dev"){
-    const card=game.devDeck.pop();
-    p.dev.push(card);
-    log("無料で発展カードを1枚引きました。");
+    grantFreeDevelopmentCard(p,"魚7匹");
   }
   checkVictory();
   render();
@@ -2027,7 +2065,9 @@ function cpuUseFish(player){
   let actions=0;
   while(actions<3){
     if(game.devDeck.length && findFishPayment(player.fishTokens,7)){
-      cpuSpendFish(player,7,"無料発展カード"); player.dev.push(game.devDeck.pop()); log(`${player.name}が魚で発展カードを1枚引きました。`); actions++; continue;
+      cpuSpendFish(player,7,"無料発展カード");
+      if(grantFreeDevelopmentCard(player,`${player.name}の魚7匹`)) actions++;
+      continue;
     }
     if(!cpuHasBuildOption(player) && findFishPayment(player.fishTokens,4)){
       const goals=[COST.city,COST.settlement,COST.road,COST.dev];

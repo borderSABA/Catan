@@ -29,6 +29,8 @@ let choiceModalState = null;
 let tradeDraft = null;
 let shownPendingTradeId = null;
 let shownFishSwapKey = null;
+let boardRenderGeneration = 0;
+const preloadedTileImages = [];
 
 function rand(n){ return Math.floor(Math.random()*n); }
 function shuffle(arr){
@@ -140,6 +142,24 @@ function createSvg(tag, attrs={}){
   const el=document.createElementNS(NS,tag);
   for(const [k,v] of Object.entries(attrs)) el.setAttribute(k,v);
   return el;
+}
+
+function preloadTileImages(){
+  if(preloadedTileImages.length) return;
+
+  for(const resource of ["wood","brick","wool","grain","ore","desert","lake"]){
+    const image=new Image();
+    let triedPng=false;
+    image.decoding="async";
+    image.addEventListener("error",()=>{
+      if(!triedPng){
+        triedPng=true;
+        image.src=`${TILE_IMAGE_PATH}/${resource}.png`;
+      }
+    });
+    image.src=`${TILE_IMAGE_PATH}/${resource}.webp`;
+    preloadedTileImages.push(image);
+  }
 }
 
 function log(msg){
@@ -2191,6 +2211,39 @@ function render(){
 }
 
 function renderBoard(){
+  const renderGeneration=++boardRenderGeneration;
+  const boardWrap=svg.parentElement;
+  let boardSnapshot=boardWrap?.querySelector(".board-snapshot");
+
+  // すでに完成済みの盤面がある場合、新しい画像が読み終わるまで上に残す。
+  // 通信更新が連続した場合は、最初の完成済みスナップショットを使い続ける。
+  if(!boardSnapshot && svg.childElementCount>0 && boardWrap){
+    boardSnapshot=svg.cloneNode(true);
+    boardSnapshot.removeAttribute("id");
+    boardSnapshot.classList.add("board-snapshot");
+    boardSnapshot.setAttribute("aria-hidden","true");
+    boardWrap.insertBefore(boardSnapshot,$("resourcePopLayer"));
+  }
+
+  let pendingTileImages=0;
+  let boardBuildFinished=false;
+
+  const releaseBoardSnapshot=()=>{
+    if(
+      !boardBuildFinished ||
+      pendingTileImages>0 ||
+      renderGeneration!==boardRenderGeneration
+    ){
+      return;
+    }
+
+    requestAnimationFrame(()=>{
+      if(renderGeneration===boardRenderGeneration){
+        boardWrap?.querySelector(".board-snapshot")?.remove();
+      }
+    });
+  };
+
   svg.innerHTML="";
   svg.setAttribute("viewBox",game.board.large?"35 -48 870 805":"-10 -72 920 850");
   const defs=createSvg("defs");
@@ -2212,19 +2265,45 @@ function renderBoard(){
     clip.appendChild(createSvg("polygon",{points:pts}));
     defs.appendChild(clip);
     const tileImage=createSvg("image",{
-      x:h.x-game.board.size*Math.sqrt(3)/2, y:h.y-game.board.size,
-      width:game.board.size*Math.sqrt(3), height:game.board.size*2,
-      href:`${TILE_IMAGE_PATH}/${h.resource}.webp`,
+      x:h.x-game.board.size*Math.sqrt(3)/2,
+      y:h.y-game.board.size,
+      width:game.board.size*Math.sqrt(3),
+      height:game.board.size*2,
       preserveAspectRatio:"xMidYMid slice",
       class:"tile-image",
       "clip-path":`url(#${clipId})`
     });
+
+    pendingTileImages++;
     let triedPng=false;
+    let imageFinished=false;
+
+    const finishTileImage=()=>{
+      if(imageFinished) return;
+      imageFinished=true;
+      pendingTileImages=Math.max(0,pendingTileImages-1);
+      releaseBoardSnapshot();
+    };
+
+    tileImage.addEventListener("load",finishTileImage,{once:true});
     tileImage.addEventListener("error",()=>{
-      if(!triedPng){ triedPng=true; tileImage.setAttribute("href",`${TILE_IMAGE_PATH}/${h.resource}.png`); }
-      else tileImage.remove();
+      if(!triedPng){
+        triedPng=true;
+        tileImage.setAttribute(
+          "href",
+          `${TILE_IMAGE_PATH}/${h.resource}.png`
+        );
+      }else{
+        tileImage.remove();
+        finishTileImage();
+      }
     });
+
     svg.appendChild(tileImage);
+    tileImage.setAttribute(
+      "href",
+      `${TILE_IMAGE_PATH}/${h.resource}.webp`
+    );
 
     // 画像より前の枠線が隠れないよう、境界線を最後に重ねる
     svg.appendChild(createSvg("polygon",{points:pts,class:"hex-border"}));
@@ -2348,6 +2427,16 @@ function renderBoard(){
     });
     svg.appendChild(hit);
   }
+
+  boardBuildFinished=true;
+  releaseBoardSnapshot();
+
+  // 読み込みイベントが返らない特殊な環境でも、永久に覆わないための保険。
+  setTimeout(()=>{
+    if(renderGeneration===boardRenderGeneration){
+      boardWrap?.querySelector(".board-snapshot")?.remove();
+    }
+  },2000);
 }
 
 function resolveOnlineTrade(accepted){
@@ -2519,4 +2608,5 @@ $("tradeCancelBtn").addEventListener("click",closeTradeModal);
 $("tradeConfirmBtn").addEventListener("click",submitPlayerTrade);
 
 initTradeOptions();
+preloadTileImages();
 initOnlineApp();

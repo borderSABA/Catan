@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.10");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.11");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -121,20 +121,101 @@ async function fetchRoomSummaries(){
 
 function renderRoomCards(rooms){
   const byId=new Map(rooms.map(room=>[room.roomId,room]));
+
   $("roomCards").innerHTML=ROOM_IDS.map((roomId,index)=>{
-    const room=byId.get(roomId)||{phase:"lobby",connected:0,members:0,settings:{playerCount:4,fishermen:true,cpuFill:false}};
+    const room=byId.get(roomId)||{
+      phase:"lobby",
+      connected:0,
+      members:0,
+      emptyResetAt:null,
+      settings:{playerCount:4,fishermen:true,cpuFill:true},
+    };
+
     const playing=room.phase==="playing";
     const full=room.connected>=6;
-    const stateText=playing?"対戦中":"ロビー";
-    return `<button class="room-card ${playing?"playing":""} ${full?"full":""}" data-room-id="${roomId}" ${playing||full?"disabled":""}>
-      <span class="room-card-title">部屋 ${index+1}</span>
+    const roomNumber=index+1;
+
+    let stateText=playing?"対戦中":"ロビー";
+    let resetNotice="";
+
+    if(playing && room.connected===0){
+      if(room.emptyResetAt){
+        const remainingMs=Math.max(0,room.emptyResetAt-Date.now());
+        const remainingMinutes=Math.max(1,Math.ceil(remainingMs/60000));
+        resetNotice=`0人のため約${remainingMinutes}分後に自動初期化`;
+      }else{
+        resetNotice="0人のため自動初期化を準備中";
+      }
+    }
+
+    return `<article class="room-card ${playing?"playing":""} ${full?"full":""}">
+      <span class="room-card-title">部屋 ${roomNumber}</span>
       <span class="room-card-state">${stateText}</span>
       <span class="room-card-count">接続 ${room.connected}/6人</span>
-    </button>`;
+      ${resetNotice?`<span class="room-card-reset-notice">${resetNotice}</span>`:""}
+      <div class="room-card-actions">
+        <button
+          class="room-join-button"
+          data-join-room="${roomId}"
+          ${playing||full?"disabled":""}
+        >${playing?"対戦中":"入室"}</button>
+        <button
+          class="room-reset-button danger"
+          data-reset-room="${roomId}"
+        >初期化</button>
+      </div>
+    </article>`;
   }).join("");
-  document.querySelectorAll("[data-room-id]").forEach(button=>{
-    button.addEventListener("click",()=>joinOnlineRoom(button.dataset.roomId));
+
+  document.querySelectorAll("[data-join-room]").forEach(button=>{
+    button.addEventListener("click",()=>{
+      joinOnlineRoom(button.dataset.joinRoom);
+    });
   });
+
+  document.querySelectorAll("[data-reset-room]").forEach(button=>{
+    button.addEventListener("click",()=>{
+      confirmManualRoomReset(button.dataset.resetRoom);
+    });
+  });
+}
+
+async function manualResetRoomFromTitle(roomId){
+  if(!ROOM_IDS.includes(roomId)) return;
+
+  showOnlineMessage(`部屋 ${ROOM_IDS.indexOf(roomId)+1}を初期化しています……`);
+
+  try{
+    const response=await fetch(
+      `${SERVER_ORIGIN}/reset-room?room=${encodeURIComponent(roomId)}`,
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+      }
+    );
+
+    const result=await response.json().catch(()=>({}));
+
+    if(!response.ok){
+      throw new Error(result.message||result.error||`HTTP ${response.status}`);
+    }
+
+    localStorage.removeItem(ONLINE_STORAGE.roomId);
+    showOnlineMessage(`部屋 ${ROOM_IDS.indexOf(roomId)+1}を初期化しました。`);
+    await fetchRoomSummaries();
+  }catch(error){
+    showOnlineMessage(`部屋を初期化できません：${error.message}`,true);
+  }
+}
+
+function confirmManualRoomReset(roomId){
+  const roomNumber=ROOM_IDS.indexOf(roomId)+1;
+
+  openConfirmModal(
+    `部屋 ${roomNumber}を初期化`,
+    "対戦状況、参加者、ホスト情報をすべて消します。対戦中の人がいる場合も強制終了します。",
+    ()=>manualResetRoomFromTitle(roomId)
+  );
 }
 
 function currentOnlineName(){
@@ -188,7 +269,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.10";
+const APP_VERSION="v1.11";
 
 function setScreenElement(element,visible,displayValue){
   if(!element) return;
@@ -350,19 +431,34 @@ function startOnlineGame(){
   $("fishermenEnabled").checked=!!onlineRoomState.settings.fishermen;
   newGame();
 
-  const cpuNames=["CPUアオ","CPUキイロ","CPUムラサキ","CPUミドリ","CPUチャ"];
+  const cpuCountToAdd=playerCount-members.length;
+  const participants=[
+    ...members.map(member=>({
+      human:true,
+      name:member.name,
+      clientId:member.clientId,
+    })),
+    ...Array.from({length:cpuCountToAdd},(_,index)=>({
+      human:false,
+      name:`CPU ${index+1}`,
+      clientId:null,
+    })),
+  ];
+
+  const randomizedOrder=shuffle(participants);
+
   game.players.forEach((player,index)=>{
-    const member=members[index];
-    if(member){
-      player.human=true;
-      player.name=member.name;
-      player.clientId=member.clientId;
-    }else{
-      player.human=false;
-      player.clientId=null;
-      player.name=cpuNames[(index-members.length)%cpuNames.length]||`CPU ${index-members.length+1}`;
-    }
+    const participant=randomizedOrder[index];
+    player.human=participant.human;
+    player.name=participant.name;
+    player.clientId=participant.clientId;
   });
+
+  game.turnOrder=game.players.map(player=>({
+    playerId:player.id,
+    name:player.name,
+    human:player.human,
+  }));
 
   game.online=true;
   game.roomId=onlineRoomState.roomId;
@@ -372,6 +468,7 @@ function startOnlineGame(){
   game.logHistory=[];
 
   const cpuCount=game.players.filter(player=>!player.human).length;
+  log(`手番順：${game.players.map((player,index)=>`${index+1}. ${player.name}`).join(" → ")}`);
   log(`人間${members.length}人＋CPU${cpuCount}人で対戦を開始しました。`);
   if(game.fishermen) log("漁師拡張を使用します。");
   suppressOnlineSync=false;

@@ -750,3 +750,52 @@ body.online-game-mode {
     min-height: 520px;
   }
 }
+
+
+/* v1.11：タイトル画面から部屋を手動初期化 */
+.room-card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.room-card:hover {
+  border-color: #1976d2;
+  transform: translateY(-3px);
+  box-shadow: 0 8px 22px #1976d222;
+}
+
+.room-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: auto;
+  padding-top: 11px;
+}
+
+.room-card-actions button {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 8px;
+}
+
+.room-reset-button {
+  background: #b91c1c;
+  color: #fff;
+}
+
+.room-reset-button:hover:not(:disabled) {
+  background: #991b1b;
+}
+
+.room-card-reset-notice {
+  display: block;
+  margin-top: 7px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}

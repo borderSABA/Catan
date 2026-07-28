@@ -2859,6 +2859,7 @@ function renderBoard(){
   }
 
   boardBuildFinished=true;
+  applyMobileBoardCrop();
   releaseBoardSnapshot();
 
   // 読み込みイベントが返らない特殊な環境でも、永久に覆わないための保険。
@@ -3091,6 +3092,70 @@ function renderSide(){
 
 let mobileGameView="board";
 
+const MOBILE_BOARD_CROP = {
+  xStart:1,
+  xEnd:19,
+  yStart:3,
+  yEnd:17,
+  divisions:20,
+};
+
+function mobileBoardCropTransform(){
+  const visibleWidth=
+    (MOBILE_BOARD_CROP.xEnd-MOBILE_BOARD_CROP.xStart) /
+    MOBILE_BOARD_CROP.divisions;
+  const visibleHeight=
+    (MOBILE_BOARD_CROP.yEnd-MOBILE_BOARD_CROP.yStart) /
+    MOBILE_BOARD_CROP.divisions;
+
+  const scaleX=1/visibleWidth;
+  const scaleY=1/visibleHeight;
+  const centerX=
+    (MOBILE_BOARD_CROP.xStart+MOBILE_BOARD_CROP.xEnd) /
+    (2*MOBILE_BOARD_CROP.divisions);
+  const centerY=
+    (MOBILE_BOARD_CROP.yStart+MOBILE_BOARD_CROP.yEnd) /
+    (2*MOBILE_BOARD_CROP.divisions);
+
+  return {
+    scaleX,
+    scaleY,
+    originX:centerX*100,
+    originY:centerY*100,
+  };
+}
+
+function applyMobileBoardCrop(){
+  const smartphone=
+    typeof isSmartphoneGameViewport==="function"
+      ?isSmartphoneGameViewport()
+      :window.matchMedia("(max-width: 720px)").matches;
+
+  const targets=[
+    $("board"),
+    ...document.querySelectorAll(".board-snapshot"),
+  ].filter(Boolean);
+
+  const crop=mobileBoardCropTransform();
+
+  for(const target of targets){
+    if(smartphone){
+      target.style.setProperty(
+        "transform-origin",
+        `${crop.originX}% ${crop.originY}%`
+      );
+      target.style.setProperty(
+        "transform",
+        `scale(${crop.scaleX}, ${crop.scaleY})`
+      );
+    }else{
+      target.style.removeProperty("transform-origin");
+      target.style.removeProperty("transform");
+    }
+  }
+}
+
+
 function setMobileGameView(view,scrollToTop=true){
   if(!["board","actions","info"].includes(view)){
     view="board";
@@ -3114,6 +3179,8 @@ function setMobileGameView(view,scrollToTop=true){
     button.setAttribute("aria-selected",active?"true":"false");
   });
 
+  applyMobileBoardCrop();
+
   if(scrollToTop && window.matchMedia("(max-width: 720px)").matches){
     const aside=main?.querySelector("aside");
     if(aside) aside.scrollTop=0;
@@ -3136,52 +3203,7 @@ function updateMobileGameSummary(turnText,phaseText,player){
   }
 }
 
-function buildMobileBoardGrid(){
-  const grid=$("mobileBoardGrid");
-  if(!grid || grid.childElementCount) return;
-
-  const fragment=document.createDocumentFragment();
-
-  for(let index=0;index<=20;index++){
-    const position=index===20
-      ?"calc(100% - 1px)"
-      :`${index*5}%`;
-
-    const verticalLine=document.createElement("span");
-    verticalLine.className=
-      `mobile-grid-line vertical ${index%5===0?"major":""}`;
-    verticalLine.style.left=position;
-    fragment.appendChild(verticalLine);
-
-    const verticalLabel=document.createElement("span");
-    verticalLabel.className=
-      `mobile-grid-label vertical-label `+
-      `${index===0?"edge-start":index===20?"edge-end":""}`;
-    verticalLabel.style.left=position;
-    verticalLabel.textContent=`X${index}`;
-    fragment.appendChild(verticalLabel);
-
-    const horizontalLine=document.createElement("span");
-    horizontalLine.className=
-      `mobile-grid-line horizontal ${index%5===0?"major":""}`;
-    horizontalLine.style.top=position;
-    fragment.appendChild(horizontalLine);
-
-    const horizontalLabel=document.createElement("span");
-    horizontalLabel.className=
-      `mobile-grid-label horizontal-label `+
-      `${index===0?"edge-start":index===20?"edge-end":""}`;
-    horizontalLabel.style.top=position;
-    horizontalLabel.textContent=`Y${index}`;
-    fragment.appendChild(horizontalLabel);
-  }
-
-  grid.appendChild(fragment);
-}
-
 function setupResponsiveGameUi(){
-  buildMobileBoardGrid();
-
   document.querySelectorAll("[data-mobile-view]").forEach(button=>{
     button.addEventListener("click",()=>{
       setMobileGameView(button.dataset.mobileView);
@@ -3190,11 +3212,16 @@ function setupResponsiveGameUi(){
 
   setMobileGameView("board",false);
 
+  window.addEventListener("resize",()=>{
+    applyMobileBoardCrop();
+  });
+
   window.addEventListener("orientationchange",()=>{
     setTimeout(()=>{
       const main=$("gameMain");
       const aside=main?.querySelector("aside");
       if(aside) aside.scrollTop=0;
+      applyMobileBoardCrop();
     },120);
   });
 }

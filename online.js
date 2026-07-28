@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.16");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.17");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -269,7 +269,26 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.16";
+const APP_VERSION="v1.17";
+
+function isSmartphoneGameViewport(){
+  return window.matchMedia(
+    "(max-width: 720px), " +
+    "(max-width: 950px) and (max-height: 520px) and (orientation: landscape)"
+  ).matches;
+}
+
+function syncGameChromeForViewport(){
+  const inGame=document.body.classList.contains("online-game-mode");
+  const showDesktopHeader=inGame && !isSmartphoneGameViewport();
+
+  setScreenElement(
+    $("gameHeader"),
+    showDesktopHeader,
+    "flex"
+  );
+}
+
 
 function setScreenElement(element,visible,displayValue){
   if(!element) return;
@@ -283,8 +302,11 @@ function setScreenElement(element,visible,displayValue){
 }
 
 function showLobbyScreen(){
+  document.documentElement.classList.add("online-lobby-mode");
+  document.documentElement.classList.remove("online-game-mode");
   document.body.classList.add("online-lobby-mode");
   document.body.classList.remove("online-game-mode");
+
   setScreenElement($("onlineLobby"),true,"grid");
   setScreenElement($("gameHeader"),false,"flex");
   setScreenElement($("gameMain"),false,"grid");
@@ -306,11 +328,14 @@ function showGameScreen(){
     gameMain.hidden ||
     gameMain.classList.contains("hidden");
 
+  document.documentElement.classList.remove("online-lobby-mode");
+  document.documentElement.classList.add("online-game-mode");
   document.body.classList.remove("online-lobby-mode");
   document.body.classList.add("online-game-mode");
+
   setScreenElement($("onlineLobby"),false,"grid");
-  setScreenElement($("gameHeader"),true,"flex");
   setScreenElement(gameMain,true,"grid");
+  syncGameChromeForViewport();
 
   const mobileNav=$("mobileGameNav");
   if(mobileNav){
@@ -553,6 +578,13 @@ function resetOnlineRoom(){
 }
 
 function initOnlineApp(){
+  window.addEventListener("resize",()=>{
+    syncGameChromeForViewport();
+  });
+
+  window.addEventListener("orientationchange",()=>{
+    setTimeout(syncGameChromeForViewport,80);
+  });
   showLobbyScreen();
   const savedName=localStorage.getItem(ONLINE_STORAGE.name)||"";
   $("onlinePlayerName").value=savedName;

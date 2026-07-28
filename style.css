@@ -2334,3 +2334,177 @@ input {
     width: 100%;
   }
 }
+
+
+/* v1.20：スマホ上部の資源・駒ステータス */
+@media (max-width: 720px) {
+  .mobile-game-summary {
+    gap: 5px;
+    padding: 6px;
+  }
+
+  #mobileTurnSummary {
+    padding: 0 3px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  #mobileResourceSummary.mobile-player-status {
+    display: grid;
+    gap: 5px;
+    width: 100%;
+    overflow: visible;
+    color: #0f172a;
+    font-size: inherit;
+    font-weight: normal;
+    white-space: normal;
+    word-spacing: normal;
+  }
+
+  .mobile-resource-counts {
+    display: grid;
+    grid-template-columns: repeat(5,minmax(0,1fr));
+    gap: 4px;
+  }
+
+  .mobile-piece-counts {
+    display: grid;
+    grid-template-columns: repeat(4,minmax(0,1fr));
+    gap: 4px;
+  }
+
+  .mobile-piece-counts:has(.fish-token-status) {
+    grid-template-columns: repeat(5,minmax(0,1fr));
+  }
+
+  .mobile-status-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 34px;
+    padding: 3px 4px;
+    border: 1px solid #b8c8d5;
+    border-radius: 7px;
+    background: rgba(255,255,255,.96);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+  }
+
+  .resource-status {
+    gap: 5px;
+  }
+
+  .resource-status .mobile-status-icon {
+    font-size: 19px;
+    line-height: 1;
+  }
+
+  .resource-status b {
+    font-size: 19px;
+    line-height: 1;
+  }
+
+  .piece-status {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr);
+    grid-template-areas:
+      "icon label"
+      "icon value";
+    justify-content: stretch;
+    column-gap: 3px;
+    min-height: 39px;
+    padding: 3px;
+    text-align: left;
+  }
+
+  .piece-status .mobile-status-icon {
+    grid-area: icon;
+    align-self: center;
+    font-size: 17px;
+    line-height: 1;
+  }
+
+  .mobile-status-label {
+    grid-area: label;
+    overflow: hidden;
+    color: #526273;
+    font-size: 8px;
+    font-weight: 800;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .piece-status b {
+    grid-area: value;
+    align-self: end;
+    font-size: 16px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .fish-token-status {
+    border-color: #68a9c1;
+    background: #e8f8fc;
+  }
+
+  .resource-total-status {
+    border-color: #c6a451;
+    background: #fff8df;
+  }
+
+  /*
+    上部ステータスが2段になった分だけ盤面領域を自動で縮める。
+    bodyはflex構成なので固定ピクセル計算は不要。
+  */
+  body.online-game-mode #gameMain {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 390px) {
+  .mobile-game-summary {
+    padding: 4px;
+  }
+
+  .mobile-resource-counts,
+  .mobile-piece-counts,
+  .mobile-piece-counts:has(.fish-token-status) {
+    gap: 2px;
+  }
+
+  .mobile-status-item {
+    padding: 2px;
+  }
+
+  .resource-status {
+    gap: 2px;
+  }
+
+  .resource-status .mobile-status-icon,
+  .resource-status b {
+    font-size: 16px;
+  }
+
+  .piece-status .mobile-status-icon {
+    font-size: 14px;
+  }
+
+  .mobile-status-label {
+    font-size: 7px;
+  }
+
+  .piece-status b {
+    font-size: 14px;
+  }
+}
+
+/* :has非対応ブラウザでも漁師時に5列になるようJS生成数に追従 */
+@supports not selector(:has(*)) {
+  @media (max-width: 720px) {
+    .mobile-piece-counts {
+      grid-template-columns: repeat(5,minmax(0,1fr));
+    }
+  }
+}

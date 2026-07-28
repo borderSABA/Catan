@@ -3441,13 +3441,65 @@ function updateMobileGameSummary(turnText,phaseText,player){
       `${turnText}${phaseText?`｜${phaseText}`:""}${diceText}`;
   }
 
-  if(resourceSummary && player){
-    resourceSummary.textContent=RESOURCES
-      .map(resource=>`${RESOURCE_ICON[resource]}${Math.max(0,player.resources[resource])}`)
-      .join(" ");
+  if(!resourceSummary || !player){
+    return;
   }
-}
 
+  const resourceItems=RESOURCES.map(resource=>
+    `<span class="mobile-status-item resource-status">
+      <span class="mobile-status-icon">${RESOURCE_ICON[resource]}</span>
+      <b>${Math.max(0,player.resources[resource])}</b>
+    </span>`
+  ).join("");
+
+  const pieceItems=[
+    {
+      className:"road-status",
+      icon:"🛣️",
+      label:"街道",
+      value:Math.max(0,player.pieces.road),
+    },
+    {
+      className:"settlement-status",
+      icon:"🏠",
+      label:"開拓地",
+      value:Math.max(0,player.pieces.settlement),
+    },
+    {
+      className:"city-status",
+      icon:"🏰",
+      label:"都市",
+      value:Math.max(0,player.pieces.city),
+    },
+    {
+      className:"resource-total-status",
+      icon:"📦",
+      label:"資源計",
+      value:Math.max(0,totalResources(player)),
+    },
+  ];
+
+  if(game?.fishermen){
+    pieceItems.push({
+      className:"fish-token-status",
+      icon:"🐟",
+      label:"魚チップ",
+      value:`${Math.max(0,player.fishTokens.length)}/7`,
+    });
+  }
+
+  const pieceHtml=pieceItems.map(item=>
+    `<span class="mobile-status-item piece-status ${item.className}">
+      <span class="mobile-status-icon">${item.icon}</span>
+      <span class="mobile-status-label">${item.label}</span>
+      <b>${item.value}</b>
+    </span>`
+  ).join("");
+
+  resourceSummary.innerHTML=
+    `<div class="mobile-resource-counts">${resourceItems}</div>`+
+    `<div class="mobile-piece-counts">${pieceHtml}</div>`;
+}
 function setupResponsiveGameUi(){
   document.querySelectorAll("[data-mobile-view]").forEach(button=>{
     button.addEventListener("click",()=>{

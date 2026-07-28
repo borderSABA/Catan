@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.18（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.18">
+  <title>カタン オンライン v1.19（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.19">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.18</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.19</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -68,7 +68,7 @@
 
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.18</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.19</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
@@ -172,6 +172,12 @@
         </div>
       </section>
 
+      <section class="panel result-panel">
+        <h2>リザルト</h2>
+        <p id="resultPanelGuide" class="result-panel-guide">途中経過はダイスの出目だけ確認できます。</p>
+        <button id="resultBtn" class="secondary">途中経過を見る</button>
+      </section>
+
       <section class="panel dev-panel">
         <h2>発展カード</h2>
         <div id="devCards"></div>
@@ -237,6 +243,23 @@
   </div>
 
 
+
+  <div id="resultModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="resultTitle">
+    <div class="result-dialog">
+      <div class="result-dialog-heading">
+        <div>
+          <h2 id="resultTitle">途中経過</h2>
+          <p id="resultGuide">ダイスの出目を表示します。</p>
+        </div>
+        <button id="resultCloseTopBtn" class="secondary result-close-top" aria-label="リザルトを閉じる">×</button>
+      </div>
+      <div id="resultContent" class="result-content"></div>
+      <div class="result-dialog-footer">
+        <button id="resultCloseBtn" class="secondary">閉じる</button>
+      </div>
+    </div>
+  </div>
+
   <div id="awardAnnouncement" class="award-announcement hidden" aria-live="assertive" aria-atomic="true">
     <div id="awardAnnouncementCard" class="award-announcement-card">
       <div id="awardAnnouncementPlayer" class="award-announcement-player"></div>
@@ -248,8 +271,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.18"></script>
-  <script src="online.js?version=v1.18"></script>
-  <script src="game.js?version=v1.18"></script>
+  <script src="config.js?version=v1.19"></script>
+  <script src="online.js?version=v1.19"></script>
+  <script src="game.js?version=v1.19"></script>
 </body>
 </html>

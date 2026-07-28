@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.18");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.19");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -269,7 +269,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.18";
+const APP_VERSION="v1.19";
 
 function isSmartphoneGameViewport(){
   return window.matchMedia(
@@ -375,6 +375,12 @@ function receiveRoomState(state){
     if(!Array.isArray(game.pendingFishDraws)) game.pendingFishDraws=[];
     if(!Array.isArray(game.resolvedTradeIds)) game.resolvedTradeIds=[];
     if(!Array.isArray(game.awardEvents)) game.awardEvents=[];
+    if(!Array.isArray(game.diceHistory)) game.diceHistory=[];
+    if(!Array.isArray(game.turnDice)){
+      game.turnDice=game.rolled && Array.isArray(game.dice)
+        ?[...game.dice]
+        :[0,0];
+    }
 
     // 再接続時は過去の演出をまとめて再生しない。
     if(!hadActiveGame){

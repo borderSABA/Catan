@@ -34,6 +34,8 @@ const shownAwardEventIds = new Set();
 const awardDisplayQueue = [];
 let awardDisplayActive = false;
 let awardDisplayTimer = null;
+let finalResultAutoTimer = null;
+let finalResultWinnerKey = null;
 let shownFishSwapKey = null;
 let boardRenderGeneration = 0;
 const preloadedTileImages = [];
@@ -473,6 +475,10 @@ function newGame(){
   clearTimeout(awardDisplayTimer);
   awardDisplayTimer=null;
   $("awardAnnouncement")?.classList.add("hidden");
+  clearTimeout(finalResultAutoTimer);
+  finalResultAutoTimer=null;
+  finalResultWinnerKey=null;
+  $("resultModal")?.classList.add("hidden");
   resetPopups();
   hideDiscardModal();
   closeChoiceModal();
@@ -498,6 +504,8 @@ function newGame(){
     rolled:false,
     diceRolling:false,
     dice:[0,0],
+    turnDice:[0,0],
+    diceHistory:[],
     robberHex:null,
     board:createBoard(playerCount,fishermen),
     bank:{wood:large?24:19,brick:large?24:19,wool:large?24:19,grain:large?24:19,ore:large?24:19},
@@ -964,6 +972,194 @@ function advanceSetup(){
   scheduleCpuIfNeeded();
 }
 
+
+function recordDiceResult(playerId,dice){
+  if(!game || !Array.isArray(dice) || dice.length<2) return;
+
+  if(!Array.isArray(game.diceHistory)){
+    game.diceHistory=[];
+  }
+
+  const eventId=`${game.turnSerial}:${playerId}`;
+
+  if(game.diceHistory.some(event=>event.id===eventId)){
+    return;
+  }
+
+  const player=playerById(playerId);
+  const normalizedDice=[
+    Math.max(1,Math.min(6,Number(dice[0])||1)),
+    Math.max(1,Math.min(6,Number(dice[1])||1)),
+  ];
+
+  game.diceHistory.push({
+    id:eventId,
+    turnSerial:game.turnSerial,
+    turnNo:game.turnNo,
+    playerId,
+    playerName:player?.name||`プレイヤー${playerId+1}`,
+    dice:normalizedDice,
+    sum:normalizedDice[0]+normalizedDice[1],
+  });
+
+  game.diceHistory=game.diceHistory.slice(-500);
+}
+
+function diceResultCounts(){
+  const counts=Object.fromEntries(
+    Array.from({length:11},(_,index)=>[index+2,0])
+  );
+
+  for(const event of game?.diceHistory||[]){
+    if(counts[event.sum]!==undefined){
+      counts[event.sum]++;
+    }
+  }
+
+  return counts;
+}
+
+function resultDiceHtml(){
+  const history=game?.diceHistory||[];
+  const counts=diceResultCounts();
+  const total=history.length;
+  const maximum=Math.max(1,...Object.values(counts));
+
+  const distribution=Object.entries(counts).map(([sum,count])=>{
+    const width=(count/maximum)*100;
+    const rate=total?Math.round((count/total)*100):0;
+
+    return `<div class="dice-result-row">
+      <span class="dice-result-sum">${sum}</span>
+      <div class="dice-result-track">
+        <span class="dice-result-bar" style="width:${width}%"></span>
+      </div>
+      <b>${count}回</b>
+      <small>${rate}%</small>
+    </div>`;
+  }).join("");
+
+  const recent=history.length
+    ?history.slice(-24).reverse().map(event=>
+      `<span class="dice-history-chip" title="${event.playerName}">
+        <span>${event.dice[0]}</span>
+        <span>${event.dice[1]}</span>
+        <b>${event.sum}</b>
+      </span>`
+    ).join("")
+    :'<p class="result-empty">まだダイスは振られていません。</p>';
+
+  return `<section class="result-section">
+    <div class="result-section-heading">
+      <h3>ダイスの出目</h3>
+      <span>合計 ${total}回</span>
+    </div>
+    <div class="dice-result-list">${distribution}</div>
+    <h4>直近の出目</h4>
+    <div class="dice-history-list">${recent}</div>
+  </section>`;
+}
+
+function finalPlayerResultHtml(){
+  const ranking=[...game.players].sort((a,b)=>{
+    const pointDifference=totalVP(b)-totalVP(a);
+    if(pointDifference) return pointDifference;
+
+    const publicDifference=visibleVP(b)-visibleVP(a);
+    if(publicDifference) return publicDifference;
+
+    return a.id-b.id;
+  });
+
+  return `<section class="result-section">
+    <div class="result-section-heading">
+      <h3>最終順位</h3>
+      <span>${game.turnNo}ラウンド</span>
+    </div>
+    <div class="final-ranking">
+      ${ranking.map((player,index)=>{
+        const awards=[
+          player.hasLongestRoad?"最長交易路":"",
+          player.hasLargestArmy?"最大騎士団":"",
+          game.fishermen&&game.oldBootHolder===player.id?"ボロ靴":"",
+        ].filter(Boolean);
+
+        return `<article class="final-player-result ${player.id===game.winner?"winner":""}">
+          <span class="final-rank">${index+1}</span>
+          <span class="player-dot" style="background:${player.color}"></span>
+          <div class="final-player-main">
+            <div class="final-player-name">
+              ${player.name}
+              ${player.id===game.winner?'<strong>勝者</strong>':""}
+            </div>
+            <div class="final-player-stats">
+              <span>街道 ${player.roads.length}</span>
+              <span>最長 ${player.longestRoad}</span>
+              <span>開拓地 ${player.settlements.length}</span>
+              <span>都市 ${player.cities.length}</span>
+              <span>騎士 ${player.knightsPlayed}</span>
+              <span>資源 ${totalResources(player)}</span>
+              <span>発展 ${player.dev.length}</span>
+              ${game.fishermen?`<span>魚 ${player.fishTokens.length}枚・${fishTotal(player)}匹</span>`:""}
+            </div>
+            ${awards.length
+              ?`<div class="final-player-awards">${awards.map(award=>`<span>${award}</span>`).join("")}</div>`
+              :""
+            }
+          </div>
+          <b class="final-player-points">${totalVP(player)}点</b>
+        </article>`;
+      }).join("")}
+    </div>
+  </section>`;
+}
+
+function closeResultModal(){
+  $("resultModal")?.classList.add("hidden");
+}
+
+function openResultModal(){
+  if(!game) return;
+
+  const finished=game.winner!==null;
+  $("resultTitle").textContent=finished
+    ?"ゲームリザルト"
+    :"途中経過";
+  $("resultGuide").textContent=finished
+    ?"全プレイヤーの最終結果と、ゲーム全体のダイス出目を表示します。"
+    :"ゲーム中はダイスの出目だけ表示します。順位や得点はゲーム終了まで非表示です。";
+
+  $("resultContent").innerHTML=
+    (finished?finalPlayerResultHtml():"")+
+    resultDiceHtml();
+
+  $("resultModal").classList.remove("hidden");
+}
+
+function scheduleFinalResultIfNeeded(){
+  if(!game || game.winner===null){
+    clearTimeout(finalResultAutoTimer);
+    finalResultAutoTimer=null;
+    finalResultWinnerKey=null;
+    return;
+  }
+
+  const winnerKey=`${game.winner}:${game.turnSerial}`;
+
+  if(finalResultWinnerKey===winnerKey){
+    return;
+  }
+
+  finalResultWinnerKey=winnerKey;
+  clearTimeout(finalResultAutoTimer);
+
+  finalResultAutoTimer=setTimeout(()=>{
+    if(game?.winner!==null){
+      openResultModal();
+    }
+  },2400);
+}
+
 function rollDice(){
   if(game.winner || game.phase!=="turn" || !isLocalTurn() || game.rolled || game.diceRolling) return;
   animateDiceRoll(currentPlayer().id,()=>{});
@@ -991,8 +1187,10 @@ function animateDiceRoll(playerId,afterResolve){
 }
 
 function resolveDiceRoll(playerId,dice,afterResolve){
-  game.dice=dice;
+  game.dice=[...dice];
+  game.turnDice=[...dice];
   game.rolled=true;
+  recordDiceResult(playerId,dice);
   const p=playerById(playerId);
   const sum=dice[0]+dice[1];
   log(`${p.name}が ${sum} を出しました。`);
@@ -2218,6 +2416,7 @@ function finishActivePhase(){
   game.turnSerial++;
   game.rolled=false;
   game.dice=[0,0];
+  game.turnDice=[0,0];
   game.phase="turn";
   render();
   scheduleCpuIfNeeded();
@@ -2637,6 +2836,7 @@ function render(){
   renderSide();
   renderLog();
   collectAwardAnnouncements();
+  scheduleFinalResultIfNeeded();
   onlineAfterRender();
 }
 
@@ -3056,7 +3256,13 @@ function renderSide(){
     phase,
     human
   );
-  $("die1").textContent=game.dice[0]||"–"; $("die2").textContent=game.dice[1]||"–";
+  const persistentDice=
+    game.rolled && Array.isArray(game.turnDice)
+      ?game.turnDice
+      :game.dice;
+
+  $("die1").textContent=persistentDice?.[0]||"–";
+  $("die2").textContent=persistentDice?.[1]||"–";
   $("rollBtn").disabled=!isLocalTurn()||game.phase!=="turn"||game.rolled||game.winner!==null||game.diceRolling;
   $("endTurnBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||game.freeRoads>0||game.winner!==null||game.diceRolling;
 
@@ -3087,6 +3293,15 @@ function renderSide(){
     </div>`;
   }).join("");
   $("cpuTradeBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||!!game.pendingTrade;
+
+  const finished=game.winner!==null;
+  $("resultBtn").textContent=finished
+    ?"最終リザルトを見る"
+    :"途中経過を見る";
+  $("resultPanelGuide").textContent=finished
+    ?"最終順位とゲーム全体のダイス結果を確認できます。"
+    :"途中経過ではダイスの出目だけ確認できます。";
+
   updateTradeRate();
 }
 
@@ -3159,8 +3374,7 @@ function syncMobileTurnPanelPlacement(){
 
   const shouldMoveToBoard=
     smartphone &&
-    document.body.classList.contains("online-game-mode") &&
-    mobileGameView==="board";
+    document.body.classList.contains("online-game-mode");
 
   if(shouldMoveToBoard){
     if(panel.parentElement!==boardWrap){
@@ -3213,8 +3427,18 @@ function updateMobileGameSummary(turnText,phaseText,player){
   const resourceSummary=$("mobileResourceSummary");
 
   if(turnSummary){
+    const persistentDice=
+      game?.rolled && Array.isArray(game.turnDice)
+        ?game.turnDice
+        :null;
+
+    const diceText=
+      persistentDice?.[0] && persistentDice?.[1]
+        ?`｜🎲${persistentDice[0]}＋${persistentDice[1]}＝${persistentDice[0]+persistentDice[1]}`
+        :"";
+
     turnSummary.textContent=
-      `${turnText}${phaseText?`｜${phaseText}`:""}`;
+      `${turnText}${phaseText?`｜${phaseText}`:""}${diceText}`;
   }
 
   if(resourceSummary && player){
@@ -3297,6 +3521,14 @@ $("choiceCancelBtn").addEventListener("click",()=>{
 });
 $("tradeCancelBtn").addEventListener("click",closeTradeModal);
 $("tradeConfirmBtn").addEventListener("click",submitPlayerTrade);
+$("resultBtn").addEventListener("click",openResultModal);
+$("resultCloseBtn").addEventListener("click",closeResultModal);
+$("resultCloseTopBtn").addEventListener("click",closeResultModal);
+$("resultModal").addEventListener("click",event=>{
+  if(event.target===$("resultModal")){
+    closeResultModal();
+  }
+});
 
 initTradeOptions();
 setupResponsiveGameUi();

@@ -3050,6 +3050,11 @@ function renderSide(){
   else if(cp.builtThisTurn) phase=`このターンの建設は完了しています。交易・発展カード使用後、ターン終了できます。`;
   else phase=`建設はこのターンに1回だけ行えます。交易・発展カード使用後、ターン終了できます。`;
   $("phaseText").textContent=phase;
+  updateMobileGameSummary(
+    game.winner!==null?"ゲーム終了":`${cp.name}のターン`,
+    phase,
+    human
+  );
   $("die1").textContent=game.dice[0]||"–"; $("die2").textContent=game.dice[1]||"–";
   $("rollBtn").disabled=!isLocalTurn()||game.phase!=="turn"||game.rolled||game.winner!==null||game.diceRolling;
   $("endTurnBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||game.freeRoads>0||game.winner!==null||game.diceRolling;
@@ -3083,13 +3088,89 @@ function renderSide(){
   $("cpuTradeBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||!!game.pendingTrade;
   updateTradeRate();
 }
+
+let mobileGameView="board";
+
+function setMobileGameView(view,scrollToTop=true){
+  if(!["board","actions","info"].includes(view)){
+    view="board";
+  }
+
+  mobileGameView=view;
+
+  const main=$("gameMain");
+  if(main){
+    main.classList.remove(
+      "mobile-view-board",
+      "mobile-view-actions",
+      "mobile-view-info"
+    );
+    main.classList.add(`mobile-view-${view}`);
+  }
+
+  document.querySelectorAll("[data-mobile-view]").forEach(button=>{
+    const active=button.dataset.mobileView===view;
+    button.classList.toggle("active",active);
+    button.setAttribute("aria-selected",active?"true":"false");
+  });
+
+  if(scrollToTop && window.matchMedia("(max-width: 720px)").matches){
+    window.scrollTo({top:0,left:0,behavior:"auto"});
+  }
+}
+
+function updateMobileGameSummary(turnText,phaseText,player){
+  const turnSummary=$("mobileTurnSummary");
+  const resourceSummary=$("mobileResourceSummary");
+
+  if(turnSummary){
+    turnSummary.textContent=
+      `${turnText}${phaseText?`｜${phaseText}`:""}`;
+  }
+
+  if(resourceSummary && player){
+    resourceSummary.textContent=RESOURCES
+      .map(resource=>`${RESOURCE_ICON[resource]}${Math.max(0,player.resources[resource])}`)
+      .join(" ");
+  }
+}
+
+function setupResponsiveGameUi(){
+  document.querySelectorAll("[data-mobile-view]").forEach(button=>{
+    button.addEventListener("click",()=>{
+      setMobileGameView(button.dataset.mobileView);
+    });
+  });
+
+  setMobileGameView("board",false);
+
+  window.addEventListener("orientationchange",()=>{
+    setTimeout(()=>{
+      if(window.matchMedia("(max-width: 720px)").matches){
+        window.scrollTo(0,0);
+      }
+    },120);
+  });
+}
+
 function initTradeOptions(){
   const html=RESOURCES.map(r=>`<option value="${r}">${RESOURCE_JA[r]}</option>`).join("");
   $("tradeGive").innerHTML=html;
   $("tradeGet").innerHTML=html;
   $("tradeGet").value="brick";
 }
-document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>setBuildMode(b.dataset.action)));
+document.querySelectorAll("[data-action]").forEach(button=>{
+  button.addEventListener("click",()=>{
+    setBuildMode(button.dataset.action);
+
+    if(
+      ["road","settlement","city"].includes(button.dataset.action) &&
+      game?.buildMode===button.dataset.action
+    ){
+      setMobileGameView("board");
+    }
+  });
+});
 $("cancelModeBtn").addEventListener("click",()=>{ if(game&&isLocalTurn()){ game.buildMode=null; render(); }});
 $("rollBtn").addEventListener("click",rollDice);
 $("endTurnBtn").addEventListener("click",endTurn);
@@ -3097,7 +3178,15 @@ $("bankTradeBtn").addEventListener("click",bankTrade);
 $("cpuTradeBtn").addEventListener("click",openPlayerTradeModal);
 $("tradeGive").addEventListener("change",updateTradeRate);
 $("fishClearBtn").addEventListener("click",()=>{ if(game){ game.selectedFishIndices=[]; renderFishPanel(); }});
-document.querySelectorAll("[data-fish-action]").forEach(b=>b.addEventListener("click",()=>performFishAction(b.dataset.fishAction)));
+document.querySelectorAll("[data-fish-action]").forEach(button=>{
+  button.addEventListener("click",()=>{
+    performFishAction(button.dataset.fishAction);
+
+    if(button.dataset.fishAction==="road" && game?.freeRoads>0){
+      setMobileGameView("board");
+    }
+  });
+});
 $("bootTransferBtn").addEventListener("click",transferOldBootHuman);
 $("discardResetBtn").addEventListener("click",()=>{
   if(!discardSelection) return;
@@ -3114,5 +3203,6 @@ $("tradeCancelBtn").addEventListener("click",closeTradeModal);
 $("tradeConfirmBtn").addEventListener("click",submitPlayerTrade);
 
 initTradeOptions();
+setupResponsiveGameUi();
 preloadTileImages();
 initOnlineApp();

@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.14（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.14">
+  <title>カタン オンライン v1.15（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.15">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.14</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.15</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -68,7 +68,7 @@
 
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.14</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.15</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
@@ -78,6 +78,19 @@
       <button id="leaveRoomGameBtn" class="secondary">退室</button>
     </div>
   </header>
+
+
+  <nav id="mobileGameNav" class="mobile-game-nav hidden" hidden aria-label="スマートフォン用ゲーム表示">
+    <div class="mobile-game-tabs" role="tablist" aria-label="表示する画面">
+      <button type="button" data-mobile-view="board" class="active" aria-selected="true">盤面</button>
+      <button type="button" data-mobile-view="actions" aria-selected="false">操作</button>
+      <button type="button" data-mobile-view="info" aria-selected="false">情報</button>
+    </div>
+    <div class="mobile-game-summary">
+      <span id="mobileTurnSummary">ゲーム準備中</span>
+      <span id="mobileResourceSummary"></span>
+    </div>
+  </nav>
 
   <main id="gameMain" class="hidden" hidden>
     <section class="board-wrap">
@@ -225,8 +238,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.14"></script>
-  <script src="online.js?version=v1.14"></script>
-  <script src="game.js?version=v1.14"></script>
+  <script src="config.js?version=v1.15"></script>
+  <script src="online.js?version=v1.15"></script>
+  <script src="game.js?version=v1.15"></script>
 </body>
 </html>

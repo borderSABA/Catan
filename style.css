@@ -955,3 +955,631 @@ body.online-game-mode {
     font-size: 88px;
   }
 }
+
+
+/* v1.15：タブレット・スマートフォン対応 */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+button,
+select,
+input {
+  touch-action: manipulation;
+}
+
+.mobile-game-nav {
+  display: none;
+}
+
+/* タブレット：盤面を上、操作パネルを2列 */
+@media (min-width: 721px) and (max-width: 1100px) {
+  body.online-game-mode {
+    overflow: auto;
+  }
+
+  #gameHeader {
+    gap: 12px;
+    padding: 10px 14px;
+  }
+
+  #gameHeader h1 {
+    font-size: 20px;
+  }
+
+  .online-game-controls {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  #gameMain {
+    width: 100%;
+    max-width: none;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .board-wrap {
+    width: 100%;
+    height: clamp(500px, 68svh, 700px);
+    min-height: 0;
+  }
+
+  #board,
+  .board-snapshot {
+    height: 100%;
+    min-height: 0;
+  }
+
+  #gameMain aside {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 9px;
+  }
+
+  .turn-panel,
+  .players-panel,
+  .side-log {
+    grid-column: 1 / -1;
+  }
+
+  .panel,
+  .log-panel {
+    min-width: 0;
+  }
+
+  .modal-backdrop {
+    padding: 14px;
+  }
+
+  .trade-dialog {
+    width: min(940px,98vw);
+  }
+
+  .online-lobby-card {
+    width: min(900px,96vw);
+  }
+}
+
+/* スマートフォン：盤面・操作・情報の3画面切替 */
+@media (max-width: 720px) {
+  body.online-game-mode {
+    overflow: auto;
+    overscroll-behavior-y: contain;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  #gameHeader {
+    display: grid !important;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: 7px;
+    align-items: center;
+    padding:
+      calc(7px + env(safe-area-inset-top))
+      8px
+      7px;
+  }
+
+  #gameHeader h1 {
+    font-size: 16px;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+
+  #gameHeader p {
+    max-width: 48vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+  }
+
+  #gameHeader .version-badge {
+    margin-left: 3px;
+    padding: 2px 5px;
+    font-size: 9px;
+  }
+
+  .online-game-controls {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 4px;
+    justify-content: end;
+  }
+
+  .online-game-controls > span {
+    align-self: center;
+    font-size: 10px;
+    text-align: center;
+  }
+
+  .online-game-controls button {
+    width: auto;
+    min-height: 32px;
+    margin: 0;
+    padding: 5px 7px;
+    font-size: 10px;
+  }
+
+  .socket-state {
+    padding: 2px 5px;
+    font-size: 9px;
+  }
+
+  .mobile-game-nav:not([hidden]) {
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    display: block;
+    padding: 5px 6px 6px;
+    border-bottom: 1px solid #b9c8d6;
+    background: rgba(244,249,252,.98);
+    box-shadow: 0 3px 10px rgba(15,23,42,.16);
+    backdrop-filter: blur(8px);
+  }
+
+  .mobile-game-tabs {
+    display: grid;
+    grid-template-columns: repeat(3,1fr);
+    gap: 5px;
+  }
+
+  .mobile-game-tabs button {
+    min-height: 42px;
+    padding: 7px 5px;
+    border: 2px solid #cbd5e1;
+    background: #fff;
+    font-size: 14px;
+  }
+
+  .mobile-game-tabs button.active {
+    border-color: #0e7490;
+    outline: 2px solid #22d3ee55;
+    background: #e6f8fc;
+    color: #0c4a6e;
+  }
+
+  .mobile-game-summary {
+    display: grid;
+    gap: 2px;
+    margin-top: 4px;
+    padding: 4px 7px;
+    border-radius: 7px;
+    background: #e8f1f6;
+    font-size: 10px;
+    line-height: 1.25;
+  }
+
+  #mobileTurnSummary {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 800;
+  }
+
+  #mobileResourceSummary {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-spacing: 3px;
+  }
+
+  #gameMain {
+    width: 100%;
+    max-width: none;
+    grid-template-columns: 1fr;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  #gameMain.mobile-view-board {
+    height: calc(100svh - 145px);
+    min-height: 390px;
+    overflow: hidden;
+  }
+
+  #gameMain.mobile-view-board aside {
+    display: none;
+  }
+
+  #gameMain.mobile-view-board .board-wrap {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  #gameMain.mobile-view-board #board,
+  #gameMain.mobile-view-board .board-snapshot {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  #gameMain.mobile-view-actions .board-wrap,
+  #gameMain.mobile-view-actions .players-panel,
+  #gameMain.mobile-view-actions .side-log {
+    display: none !important;
+  }
+
+  #gameMain.mobile-view-info .board-wrap,
+  #gameMain.mobile-view-info .turn-panel,
+  #gameMain.mobile-view-info .resources-panel,
+  #gameMain.mobile-view-info .build-panel,
+  #gameMain.mobile-view-info .trade-panel,
+  #gameMain.mobile-view-info .fish-panel,
+  #gameMain.mobile-view-info .dev-panel {
+    display: none !important;
+  }
+
+  #gameMain.mobile-view-actions aside,
+  #gameMain.mobile-view-info aside {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    width: 100%;
+    padding: 7px;
+  }
+
+  .panel,
+  .log-panel {
+    padding: 10px;
+    border-radius: 10px;
+  }
+
+  .panel h2,
+  .log-panel h2 {
+    font-size: 15px;
+  }
+
+  .turn-panel {
+    order: 1;
+  }
+
+  .resources-panel {
+    order: 2;
+  }
+
+  .build-panel {
+    order: 3;
+  }
+
+  .trade-panel {
+    order: 4;
+  }
+
+  .fish-panel {
+    order: 5;
+  }
+
+  .dev-panel {
+    order: 6;
+  }
+
+  .players-panel {
+    order: 1;
+  }
+
+  .side-log {
+    order: 2;
+    margin: 0;
+    max-width: none;
+  }
+
+  #diceArea {
+    grid-template-columns: 42px 42px minmax(0,1fr);
+    gap: 6px;
+  }
+
+  #diceArea #endTurnBtn {
+    grid-column: 1 / -1;
+    min-height: 44px;
+  }
+
+  #rollBtn {
+    min-height: 44px;
+  }
+
+  .resource-grid {
+    grid-template-columns: repeat(5,minmax(0,1fr));
+    gap: 3px;
+  }
+
+  .resource {
+    min-width: 0;
+    padding: 5px 1px;
+    overflow: hidden;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .resource b {
+    font-size: 18px;
+  }
+
+  .small-grid {
+    gap: 5px 8px;
+    font-size: 11px;
+  }
+
+  .button-grid button {
+    min-height: 54px;
+    padding: 6px 3px;
+    font-size: 12px;
+  }
+
+  .button-grid small {
+    font-size: 8px;
+  }
+
+  .trade-row {
+    grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
+  }
+
+  .trade-row select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .fish-action-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .fish-action-grid button {
+    min-height: 44px;
+    font-size: 11px;
+  }
+
+  .player-card {
+    grid-template-columns: 12px minmax(0,1fr) auto;
+    padding: 8px 4px;
+  }
+
+  .player-card small {
+    display: block;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+
+  #log {
+    max-height: 48svh;
+  }
+
+  .resource-pop-layer {
+    top: 7px;
+    right: 7px;
+    width: calc(100% - 14px);
+  }
+
+  .resource-pop {
+    padding: 7px 8px;
+  }
+
+  .edge-click {
+    stroke-width: 29;
+  }
+
+  .vertex-click {
+    stroke-width: 24;
+  }
+
+  .modal-backdrop {
+    align-items: end;
+    padding:
+      8px
+      6px
+      calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .choice-dialog,
+  .discard-dialog,
+  .trade-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: 92svh;
+    padding: 13px;
+    border-radius: 17px 17px 8px 8px;
+  }
+
+  .choice-dialog h2,
+  .discard-dialog h2,
+  .trade-dialog h2 {
+    font-size: 20px;
+  }
+
+  .choice-options {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 6px;
+  }
+
+  .choice-option {
+    min-height: 78px;
+    padding: 9px 5px;
+  }
+
+  .choice-option-icon {
+    font-size: 25px;
+  }
+
+  .choice-option-label {
+    font-size: 14px;
+  }
+
+  .trade-player-choices {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 6px;
+  }
+
+  .trade-editor-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .trade-editor {
+    padding: 8px;
+  }
+
+  .trade-resource-line {
+    grid-template-columns: minmax(90px,1fr) 38px 32px 38px;
+    gap: 4px;
+    padding: 5px;
+  }
+
+  .trade-qty-button {
+    width: 38px;
+    height: 38px;
+  }
+
+  .trade-modal-footer {
+    position: sticky;
+    bottom: -13px;
+    padding: 9px 0 4px;
+    background: #fff;
+  }
+
+  .trade-modal-footer button {
+    min-height: 44px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .discard-choices {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 6px;
+  }
+
+  .discard-choice {
+    min-height: 96px;
+  }
+
+  .discard-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  #discardCount {
+    grid-column: 1 / -1;
+  }
+
+  .award-announcement {
+    padding: 12px;
+  }
+
+  .award-announcement-card {
+    width: min(94vw,430px);
+  }
+
+  .award-announcement-image-box {
+    width: min(44vw,170px);
+    height: min(44vw,170px);
+  }
+
+  .online-lobby {
+    place-items: start center;
+    padding:
+      calc(10px + env(safe-area-inset-top))
+      7px
+      calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .online-lobby-card {
+    width: 100%;
+    max-height: none;
+    padding: 14px 10px;
+    border-radius: 15px;
+  }
+
+  .online-title {
+    margin-bottom: 12px;
+  }
+
+  .online-title h1 {
+    font-size: 25px;
+  }
+
+  .room-cards {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 7px;
+  }
+
+  .room-card {
+    min-height: 150px;
+    padding: 10px;
+    border-width: 2px;
+  }
+
+  .room-card-title {
+    font-size: 18px;
+  }
+
+  .room-card-actions {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .online-room-grid {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .joined-room-heading {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 430px) {
+  .room-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .room-card {
+    min-height: 132px;
+  }
+
+  .room-card-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .online-game-controls button {
+    padding-inline: 5px;
+  }
+
+  #gameMain.mobile-view-board {
+    height: calc(100svh - 151px);
+    min-height: 360px;
+  }
+}
+
+/* 横向きスマートフォンでは盤面を最大限広く使う */
+@media (max-width: 950px) and (max-height: 520px) and (orientation: landscape) {
+  #gameHeader {
+    grid-template-columns: 1fr auto;
+    padding: 4px 7px;
+  }
+
+  #gameHeader p {
+    display: none;
+  }
+
+  .mobile-game-nav:not([hidden]) {
+    padding: 3px 5px;
+  }
+
+  .mobile-game-tabs button {
+    min-height: 34px;
+    padding: 4px;
+    font-size: 12px;
+  }
+
+  .mobile-game-summary {
+    display: none;
+  }
+
+  #gameMain.mobile-view-board {
+    height: calc(100svh - 79px);
+    min-height: 260px;
+  }
+}

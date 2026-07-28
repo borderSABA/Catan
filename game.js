@@ -3115,7 +3115,8 @@ function setMobileGameView(view,scrollToTop=true){
   });
 
   if(scrollToTop && window.matchMedia("(max-width: 720px)").matches){
-    window.scrollTo({top:0,left:0,behavior:"auto"});
+    const aside=main?.querySelector("aside");
+    if(aside) aside.scrollTop=0;
   }
 }
 
@@ -3135,7 +3136,52 @@ function updateMobileGameSummary(turnText,phaseText,player){
   }
 }
 
+function buildMobileBoardGrid(){
+  const grid=$("mobileBoardGrid");
+  if(!grid || grid.childElementCount) return;
+
+  const fragment=document.createDocumentFragment();
+
+  for(let index=0;index<=20;index++){
+    const position=index===20
+      ?"calc(100% - 1px)"
+      :`${index*5}%`;
+
+    const verticalLine=document.createElement("span");
+    verticalLine.className=
+      `mobile-grid-line vertical ${index%5===0?"major":""}`;
+    verticalLine.style.left=position;
+    fragment.appendChild(verticalLine);
+
+    const verticalLabel=document.createElement("span");
+    verticalLabel.className=
+      `mobile-grid-label vertical-label `+
+      `${index===0?"edge-start":index===20?"edge-end":""}`;
+    verticalLabel.style.left=position;
+    verticalLabel.textContent=`X${index}`;
+    fragment.appendChild(verticalLabel);
+
+    const horizontalLine=document.createElement("span");
+    horizontalLine.className=
+      `mobile-grid-line horizontal ${index%5===0?"major":""}`;
+    horizontalLine.style.top=position;
+    fragment.appendChild(horizontalLine);
+
+    const horizontalLabel=document.createElement("span");
+    horizontalLabel.className=
+      `mobile-grid-label horizontal-label `+
+      `${index===0?"edge-start":index===20?"edge-end":""}`;
+    horizontalLabel.style.top=position;
+    horizontalLabel.textContent=`Y${index}`;
+    fragment.appendChild(horizontalLabel);
+  }
+
+  grid.appendChild(fragment);
+}
+
 function setupResponsiveGameUi(){
+  buildMobileBoardGrid();
+
   document.querySelectorAll("[data-mobile-view]").forEach(button=>{
     button.addEventListener("click",()=>{
       setMobileGameView(button.dataset.mobileView);
@@ -3146,9 +3192,9 @@ function setupResponsiveGameUi(){
 
   window.addEventListener("orientationchange",()=>{
     setTimeout(()=>{
-      if(window.matchMedia("(max-width: 720px)").matches){
-        window.scrollTo(0,0);
-      }
+      const main=$("gameMain");
+      const aside=main?.querySelector("aside");
+      if(aside) aside.scrollTop=0;
     },120);
   });
 }

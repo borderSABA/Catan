@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.15");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.16");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -269,7 +269,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.15";
+const APP_VERSION="v1.16";
 
 function setScreenElement(element,visible,displayValue){
   if(!element) return;
@@ -350,6 +350,16 @@ function receiveRoomState(state){
     enforceResourceIntegrity();
     showGameScreen();
     $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
+
+    const mobileReturnButton=$("mobileReturnLobbyBtn");
+    if(mobileReturnButton){
+      const host=isOnlineHost();
+      mobileReturnButton.disabled=!host;
+      mobileReturnButton.textContent=host
+        ?"ロビーへ戻す"
+        :"ロビーへ戻す（ホストのみ）";
+    }
+
     const cpuCount=game.players.filter(player=>!player.human).length;
     $("onlineGameSubtitle").textContent=`${game.playerCount}人用${cpuCount?`・CPU${cpuCount}人`:""}${game.fishermen?"・漁師拡張":""}`;
     render();
@@ -550,6 +560,8 @@ function initOnlineApp(){
   $("leaveRoomLobbyBtn").addEventListener("click",leaveOnlineRoom);
   $("leaveRoomGameBtn").addEventListener("click",leaveOnlineRoom);
   $("returnLobbyBtn").addEventListener("click",resetOnlineRoom);
+  $("mobileLeaveRoomGameBtn").addEventListener("click",leaveOnlineRoom);
+  $("mobileReturnLobbyBtn").addEventListener("click",resetOnlineRoom);
   $("resetLobbyRoomBtn").addEventListener("click",resetOnlineRoom);
   $("startOnlineGameBtn").addEventListener("click",startOnlineGame);
   $("playerCount").addEventListener("change",sendSettings);

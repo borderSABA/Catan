@@ -1583,3 +1583,192 @@ input {
     min-height: 260px;
   }
 }
+
+
+/* v1.16：スマホ画面固定・余白確認グリッド */
+.mobile-session-panel {
+  display: none;
+}
+
+.mobile-board-grid {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  html,
+  body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden !important;
+  }
+
+  body.online-game-mode {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden !important;
+    padding: 0;
+  }
+
+  /* スマホではタイトル・部屋番号・接続状態を一切表示しない */
+  body.online-game-mode #gameHeader {
+    display: none !important;
+  }
+
+  body.online-game-mode .mobile-game-nav:not([hidden]) {
+    position: relative;
+    top: auto;
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  body.online-game-mode #gameMain {
+    flex: 1 1 auto;
+    width: 100%;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  #gameMain.mobile-view-board {
+    height: auto;
+    min-height: 0;
+  }
+
+  #gameMain.mobile-view-board .board-wrap {
+    height: 100%;
+    min-height: 0;
+  }
+
+  #gameMain.mobile-view-actions aside,
+  #gameMain.mobile-view-info aside {
+    height: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #gameMain.mobile-view-actions .mobile-session-panel {
+    display: none !important;
+  }
+
+  #gameMain.mobile-view-info .mobile-session-panel {
+    display: block !important;
+    order: 2;
+  }
+
+  #gameMain.mobile-view-info .side-log {
+    order: 3;
+  }
+
+  .mobile-session-note {
+    margin: 0 0 8px;
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .mobile-session-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .mobile-session-buttons button {
+    width: 100%;
+    min-height: 46px;
+    margin: 0;
+  }
+
+  /* 盤面を縦横20等分。境界線はX0～X20、Y0～Y20 */
+  #gameMain.mobile-view-board .mobile-board-grid {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: block;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .mobile-grid-line {
+    position: absolute;
+    opacity: .82;
+    filter: drop-shadow(0 0 1px #000);
+  }
+
+  .mobile-grid-line.vertical {
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px solid rgba(255,255,255,.9);
+  }
+
+  .mobile-grid-line.horizontal {
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px solid rgba(255,255,255,.9);
+  }
+
+  .mobile-grid-line.major.vertical {
+    border-left: 2px solid rgba(255,213,0,.95);
+  }
+
+  .mobile-grid-line.major.horizontal {
+    border-top: 2px solid rgba(255,213,0,.95);
+  }
+
+  .mobile-grid-label {
+    position: absolute;
+    z-index: 2;
+    padding: 1px 2px;
+    border-radius: 3px;
+    background: rgba(0,0,0,.72);
+    color: #fff;
+    font: 800 8px/1 system-ui,sans-serif;
+    letter-spacing: -.04em;
+    text-shadow: 0 1px 1px #000;
+    white-space: nowrap;
+  }
+
+  .vertical-label {
+    top: 2px;
+    transform: translateX(-50%);
+  }
+
+  .horizontal-label {
+    left: 2px;
+    transform: translateY(-50%);
+  }
+
+  .vertical-label.edge-start {
+    transform: none;
+  }
+
+  .vertical-label.edge-end {
+    transform: translateX(-100%);
+  }
+
+  .horizontal-label.edge-start {
+    transform: none;
+  }
+
+  .horizontal-label.edge-end {
+    transform: translateY(-100%);
+  }
+}
+
+@media (max-width: 950px) and (max-height: 520px) and (orientation: landscape) {
+  body.online-game-mode #gameHeader {
+    display: none !important;
+  }
+
+  #gameMain.mobile-view-board {
+    height: auto;
+    min-height: 0;
+  }
+}

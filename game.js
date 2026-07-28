@@ -3100,28 +3100,18 @@ const MOBILE_BOARD_CROP = {
   divisions:20,
 };
 
-function mobileBoardCropTransform(){
-  const visibleWidth=
-    (MOBILE_BOARD_CROP.xEnd-MOBILE_BOARD_CROP.xStart) /
-    MOBILE_BOARD_CROP.divisions;
-  const visibleHeight=
-    (MOBILE_BOARD_CROP.yEnd-MOBILE_BOARD_CROP.yStart) /
-    MOBILE_BOARD_CROP.divisions;
-
-  const scaleX=1/visibleWidth;
-  const scaleY=1/visibleHeight;
-  const centerX=
-    (MOBILE_BOARD_CROP.xStart+MOBILE_BOARD_CROP.xEnd) /
-    (2*MOBILE_BOARD_CROP.divisions);
-  const centerY=
-    (MOBILE_BOARD_CROP.yStart+MOBILE_BOARD_CROP.yEnd) /
-    (2*MOBILE_BOARD_CROP.divisions);
-
+function mobileBoardCropInset(){
   return {
-    scaleX,
-    scaleY,
-    originX:centerX*100,
-    originY:centerY*100,
+    left:(MOBILE_BOARD_CROP.xStart/MOBILE_BOARD_CROP.divisions)*100,
+    right:(
+      (MOBILE_BOARD_CROP.divisions-MOBILE_BOARD_CROP.xEnd) /
+      MOBILE_BOARD_CROP.divisions
+    )*100,
+    top:(MOBILE_BOARD_CROP.yStart/MOBILE_BOARD_CROP.divisions)*100,
+    bottom:(
+      (MOBILE_BOARD_CROP.divisions-MOBILE_BOARD_CROP.yEnd) /
+      MOBILE_BOARD_CROP.divisions
+    )*100,
   };
 }
 
@@ -3136,25 +3126,55 @@ function applyMobileBoardCrop(){
     ...document.querySelectorAll(".board-snapshot"),
   ].filter(Boolean);
 
-  const crop=mobileBoardCropTransform();
+  const inset=mobileBoardCropInset();
+  const clipValue=
+    `inset(${inset.top}% ${inset.right}% `+
+    `${inset.bottom}% ${inset.left}%)`;
 
   for(const target of targets){
+    // v1.17の拡大を完全に解除する
+    target.style.removeProperty("transform");
+    target.style.removeProperty("transform-origin");
+
     if(smartphone){
-      target.style.setProperty(
-        "transform-origin",
-        `${crop.originX}% ${crop.originY}%`
-      );
-      target.style.setProperty(
-        "transform",
-        `scale(${crop.scaleX}, ${crop.scaleY})`
-      );
+      target.style.setProperty("clip-path",clipValue);
+      target.style.setProperty("-webkit-clip-path",clipValue);
     }else{
-      target.style.removeProperty("transform-origin");
-      target.style.removeProperty("transform");
+      target.style.removeProperty("clip-path");
+      target.style.removeProperty("-webkit-clip-path");
     }
   }
 }
 
+function syncMobileTurnPanelPlacement(){
+  const panel=document.querySelector(".turn-panel");
+  const home=$("turnPanelHome");
+  const boardWrap=document.querySelector(".board-wrap");
+  if(!panel || !home || !boardWrap) return;
+
+  const smartphone=
+    typeof isSmartphoneGameViewport==="function"
+      ?isSmartphoneGameViewport()
+      :window.matchMedia("(max-width: 720px)").matches;
+
+  const shouldMoveToBoard=
+    smartphone &&
+    document.body.classList.contains("online-game-mode") &&
+    mobileGameView==="board";
+
+  if(shouldMoveToBoard){
+    if(panel.parentElement!==boardWrap){
+      boardWrap.appendChild(panel);
+    }
+    panel.classList.add("mobile-board-turn-panel");
+  }else{
+    const homeParent=home.parentElement;
+    if(homeParent && panel.parentElement!==homeParent){
+      homeParent.insertBefore(panel,home.nextSibling);
+    }
+    panel.classList.remove("mobile-board-turn-panel");
+  }
+}
 
 function setMobileGameView(view,scrollToTop=true){
   if(!["board","actions","info"].includes(view)){
@@ -3180,6 +3200,7 @@ function setMobileGameView(view,scrollToTop=true){
   });
 
   applyMobileBoardCrop();
+  syncMobileTurnPanelPlacement();
 
   if(scrollToTop && window.matchMedia("(max-width: 720px)").matches){
     const aside=main?.querySelector("aside");
@@ -3214,6 +3235,7 @@ function setupResponsiveGameUi(){
 
   window.addEventListener("resize",()=>{
     applyMobileBoardCrop();
+    syncMobileTurnPanelPlacement();
   });
 
   window.addEventListener("orientationchange",()=>{
@@ -3222,6 +3244,7 @@ function setupResponsiveGameUi(){
       const aside=main?.querySelector("aside");
       if(aside) aside.scrollTop=0;
       applyMobileBoardCrop();
+      syncMobileTurnPanelPlacement();
     },120);
   });
 }

@@ -2378,13 +2378,13 @@ function transferOldBootHuman(){
   if(!game.fishermen || game.phase!=="turn" || !isLocalPlayer(p) || game.oldBootHolder!==p.id) return;
   const candidates=eligibleBootRecipients(p);
   if(!candidates.length){
-    log("公開勝利点が同点以上の相手がいないため、ボロ靴を渡せません。");
+    log("勝利点が同点以上の相手がいないため、ボロ靴を渡せません。");
     return;
   }
   openChoiceModal({
     title:"ボロ靴を渡す",
-    guide:"自分と同点以上の公開勝利点を持つ相手を選択してください。",
-    options:playerChoiceOptions(candidates,player=>`公開勝利点 ${publicVP(player)}点`),
+    guide:"自分と同点以上の勝利点を持つ相手を選択してください。",
+    options:playerChoiceOptions(candidates,player=>`勝利点 ${publicVP(player)}点`),
     onSelect:targetId=>transferOldBoot(p.id,targetId),
     allowCancel:true,
   });
@@ -3424,18 +3424,20 @@ function renderSide(){
   $("rollBtn").disabled=!isLocalTurn()||game.phase!=="turn"||game.rolled||game.winner!==null||game.diceRolling;
   $("endTurnBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||game.freeRoads>0||game.winner!==null||game.diceRolling;
 
-  $("resourceCards").innerHTML=RESOURCES.map(resource=>
-    `<div class="resource ${resource}">
-      <span class="resource-name">${RESOURCE_ICON[resource]} ${RESOURCE_JA[resource]}</span>
-      <span class="resource-own-count">
-        <small>所持</small>
-        <b>${Math.max(0,human.resources[resource])}</b>
-      </span>
-      <span class="resource-bank-stock">
-        銀行在庫 ${Math.max(0,game.bank[resource])}
-      </span>
-    </div>`
-  ).join("");
+  $("resourceCards").innerHTML=RESOURCES.map(resource=>{
+    const ownCount=Math.max(0,human.resources[resource]);
+    const bankCount=String(
+      Math.max(0,game.bank[resource])
+    ).padStart(2,"0");
+
+    return `<div class="resource-stock-column">
+      <div class="resource ${resource}">
+        <span class="resource-name">${RESOURCE_ICON[resource]} ${RESOURCE_JA[resource]}</span>
+        <b>${ownCount}</b>
+      </div>
+      <span class="resource-bank-stock">在庫${bankCount}</span>
+    </div>`;
+  }).join("");
   $("pieceCounts").innerHTML=`<span>街道駒 ${human.pieces.road}</span><span>開拓地駒 ${human.pieces.settlement}</span><span>都市駒 ${human.pieces.city}</span><span>資源計 ${totalResources(human)}</span><span>発展山札 ${game.devDeck.length}</span>`;
   document.querySelectorAll("[data-action]").forEach(b=>{
     b.classList.toggle("active",game.buildMode===b.dataset.action);
@@ -3453,12 +3455,36 @@ function renderSide(){
   }).join("");
   document.querySelectorAll("[data-dev]").forEach(b=>b.addEventListener("click",()=>playDev(b.dataset.dev)));
 
-  $("players").innerHTML=game.players.map(pl=>{
-    const awards=[pl.hasLongestRoad?"最長交易路":null,pl.hasLargestArmy?"最大騎士力":null].filter(Boolean).join("・");
-    return `<div class="player-card ${pl.id===game.current?"current":""}">
-      <span class="player-dot" style="background:${pl.color}"></span>
-      <span>${pl.name}${game.fishermen&&game.oldBootHolder===pl.id?'<span class="boot-mark">ボロ靴</span>':""}<br><small>資源${totalResources(pl)} / 発展${pl.dev.length}${game.fishermen?` / 魚${pl.fishTokens.length}枚`:""} / 公開VP${pl.revealedVP} / 騎士${pl.knightsPlayed} / 街道${pl.longestRoad}${awards?` / ${awards}`:""}</small></span>
-      <b>${pl.id===human.id?totalVP(pl):publicVP(pl)}/${victoryTarget(pl)}点</b>
+  $("players").innerHTML=game.players.map(player=>{
+    const awards=[
+      player.hasLongestRoad?"最長交易路":null,
+      player.hasLargestArmy?"最大騎士団":null,
+    ].filter(Boolean).join("・");
+
+    const victoryPoints=publicVP(player);
+
+    return `<div class="player-card ${player.id===game.current?"current":""}">
+      <span class="player-dot" style="background:${player.color}"></span>
+      <span>
+        ${player.name}
+        ${game.fishermen&&game.oldBootHolder===player.id
+          ?'<span class="boot-mark">ボロ靴</span>'
+          :""
+        }
+        <br>
+        <small>
+          資源${totalResources(player)}
+          / 発展${player.dev.length}
+          ${game.fishermen?` / 魚${player.fishTokens.length}枚`:""}
+          / 勝利点${victoryPoints}
+          / 騎士${player.knightsPlayed}
+          / 街道${player.longestRoad}
+          ${awards?` / ${awards}`:""}
+        </small>
+      </span>
+      <b class="player-victory-points">
+        ${victoryPoints}/${victoryTarget(player)}点
+      </b>
     </div>`;
   }).join("");
   $("cpuTradeBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||!!game.pendingTrade;

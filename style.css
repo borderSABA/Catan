@@ -2949,3 +2949,73 @@ input {
     font-size: 37px;
   }
 }
+
+
+/* v1.24：資源在庫の位置・プレイヤー勝利点 */
+.resource-grid {
+  align-items: start;
+}
+
+.resource-stock-column {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 3px;
+  min-width: 0;
+}
+
+.resource-stock-column .resource {
+  width: 100%;
+  min-height: 54px;
+  padding: 6px 3px;
+}
+
+.resource-stock-column .resource-name {
+  display: block;
+}
+
+.resource-stock-column .resource b {
+  display: block;
+  font-size: 21px;
+}
+
+.resource-stock-column .resource-bank-stock {
+  display: block;
+  width: 100%;
+  padding: 2px 1px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #334155;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-align: center;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.player-victory-points {
+  min-width: 54px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (min-width: 1101px) {
+  .resource-stock-column .resource {
+    min-height: 57px;
+  }
+
+  .resource-stock-column .resource-bank-stock {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 720px) {
+  .resource-stock-column .resource {
+    min-height: 48px;
+  }
+
+  .resource-stock-column .resource-bank-stock {
+    font-size: 9px;
+  }
+}

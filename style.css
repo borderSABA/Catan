@@ -2679,3 +2679,273 @@ input {
     min-height: 66px;
   }
 }
+
+
+/* v1.22：発展カード取得・使用演出 */
+.award-announcement-card.type-devDraw {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(236,226,255,.31), transparent 45%),
+    linear-gradient(145deg, #503a76, #21162f);
+}
+
+.award-announcement-card.type-devKnight {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(223,239,255,.3), transparent 45%),
+    linear-gradient(145deg, #405d7a, #172534);
+}
+
+.award-announcement-card.type-devMonopoly {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,232,159,.32), transparent 45%),
+    linear-gradient(145deg, #7b5512, #302006);
+}
+
+.award-announcement-card.type-devDiscovery {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(229,255,210,.3), transparent 45%),
+    linear-gradient(145deg, #426833, #182a13);
+}
+
+.award-announcement-card.type-devRoadBuilding {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,226,174,.3), transparent 45%),
+    linear-gradient(145deg, #75502d, #2b1b0e);
+}
+
+.award-announcement-card.type-devVictoryPoint {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,244,174,.38), transparent 45%),
+    linear-gradient(145deg, #7e6817, #332906);
+}
+
+
+/* v1.23：盗賊・発展カード・漁師の専用演出 */
+.award-announcement-card.announcement-text-before-image {
+  display: flex;
+  flex-direction: column;
+}
+
+.award-announcement-card.announcement-text-before-image
+.award-announcement-player {
+  order: 1;
+}
+
+.award-announcement-card.announcement-text-before-image
+.award-announcement-title {
+  order: 2;
+  margin-top: 5px;
+}
+
+.award-announcement-card.announcement-text-before-image
+.award-announcement-image-box {
+  order: 3;
+  margin-top: 17px;
+  margin-bottom: 0;
+}
+
+.award-announcement-player.hidden {
+  display: none !important;
+}
+
+.award-announcement-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.award-announcement-scene.hidden {
+  display: none !important;
+}
+
+/* 7：白枠の中で盗賊アイコンが左右に揺れる */
+.award-announcement-card.type-robberAppears {
+  border: 7px solid #fff !important;
+  background:
+    radial-gradient(circle at 50% 32%, rgba(255,255,255,.98), rgba(232,238,243,.96) 55%, rgba(176,190,200,.96));
+  color: #111827;
+  box-shadow:
+    0 32px 100px rgba(0,0,0,.68),
+    inset 0 0 0 4px rgba(15,23,42,.2);
+}
+
+.award-announcement-card.type-robberAppears
+.award-announcement-title {
+  color: #111827;
+  font-size: clamp(31px,5vw,51px);
+  text-shadow:
+    0 3px 0 #fff,
+    0 5px 10px rgba(0,0,0,.28);
+}
+
+.award-announcement-card.type-robberAppears
+.award-announcement-image-box {
+  border-color: #fff;
+  background: rgba(255,255,255,.68);
+}
+
+.robber-shake-scene {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.robber-shake-icon {
+  display: block;
+  font-size: 128px;
+  line-height: 1;
+  filter: drop-shadow(0 12px 9px rgba(0,0,0,.3));
+  animation: robberIconShake .22s ease-in-out infinite alternate;
+}
+
+@keyframes robberIconShake {
+  from {
+    transform: translateX(-27px) rotate(-9deg);
+  }
+  to {
+    transform: translateX(27px) rotate(9deg);
+  }
+}
+
+/* 騎士 */
+.award-announcement-card.type-devKnight {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(223,239,255,.34), transparent 45%),
+    linear-gradient(145deg, #405d7a, #172534);
+}
+
+/* 街道建設 */
+.award-announcement-card.type-devRoadBuilding {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,226,174,.34), transparent 45%),
+    linear-gradient(145deg, #75502d, #2b1b0e);
+}
+
+/* 発見 */
+.award-announcement-card.type-devDiscovery {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(229,255,210,.34), transparent 45%),
+    linear-gradient(145deg, #426833, #182a13);
+}
+
+/* 独占 */
+.award-announcement-card.type-devMonopoly {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,232,159,.36), transparent 45%),
+    linear-gradient(145deg, #7b5512, #302006);
+}
+
+/* 魚を投げ、盗賊が追いかけて盤外へ去る */
+.award-announcement-card.type-fishRemoveRobber {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(219,250,255,.38), transparent 48%),
+    linear-gradient(145deg, #317a91, #123443);
+}
+
+.fish-chase-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 50% 72%, rgba(255,255,255,.15), transparent 55%);
+}
+
+.thrown-fish-icon,
+.chasing-robber-icon,
+.fish-throw-spark {
+  position: absolute;
+  display: block;
+  line-height: 1;
+  filter: drop-shadow(0 8px 7px rgba(0,0,0,.3));
+}
+
+.thrown-fish-icon {
+  left: -30%;
+  bottom: 14%;
+  font-size: 77px;
+  animation: thrownFishFlight 1.05s ease-in-out infinite;
+}
+
+.chasing-robber-icon {
+  left: -40%;
+  bottom: 7%;
+  font-size: 98px;
+  animation: chasingRobberFlight 1.05s .18s ease-in-out infinite;
+}
+
+.fish-throw-spark {
+  left: 17%;
+  bottom: 25%;
+  font-size: 48px;
+  opacity: 0;
+  animation: fishThrowSpark .78s ease-out infinite;
+}
+
+@keyframes thrownFishFlight {
+  0% {
+    transform: translate(0,65px) rotate(-35deg);
+  }
+  42% {
+    transform: translate(265px,-92px) rotate(28deg);
+  }
+  100% {
+    transform: translate(565px,-10px) rotate(88deg);
+  }
+}
+
+@keyframes chasingRobberFlight {
+  0% {
+    transform: translate(0,45px) rotate(-10deg);
+  }
+  48% {
+    transform: translate(255px,-55px) rotate(8deg);
+  }
+  100% {
+    transform: translate(580px,8px) rotate(18deg);
+  }
+}
+
+@keyframes fishThrowSpark {
+  0% {
+    opacity: 0;
+    transform: scale(.5) translateX(-15px);
+  }
+  28% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.25) translateX(105px);
+  }
+}
+
+/* 漁師の資源強奪 */
+.award-announcement-card.type-fishSteal {
+  background:
+    radial-gradient(circle at 50% 25%, rgba(255,238,191,.34), transparent 46%),
+    linear-gradient(145deg, #6d4b24, #26180b);
+}
+
+@media (max-width: 600px) {
+  .award-announcement-card.announcement-text-before-image
+  .award-announcement-image-box {
+    margin-top: 12px;
+  }
+
+  .robber-shake-icon {
+    font-size: 98px;
+  }
+
+  .thrown-fish-icon {
+    font-size: 61px;
+  }
+
+  .chasing-robber-icon {
+    font-size: 78px;
+  }
+
+  .fish-throw-spark {
+    font-size: 37px;
+  }
+}

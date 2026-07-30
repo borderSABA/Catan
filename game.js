@@ -187,28 +187,99 @@ const AWARD_PRESENTATION = {
     fallback:"🛣️",
     asset:"longest-road",
   },
+  devDraw:{
+    title:"発展カードを引きました",
+    fallback:"🎴",
+    asset:"development-card",
+  },
+  devKnight:{
+    title:"騎士が盗賊を追いやった！",
+    fallback:"🐴",
+    asset:"dev-knight",
+    playerSuffix:"の",
+    textBeforeImage:true,
+  },
+  devMonopoly:{
+    title:"資源を独占！？",
+    fallback:"👑",
+    asset:"dev-monopoly",
+    playerSuffix:"が",
+    textBeforeImage:true,
+  },
+  devDiscovery:{
+    title:"資源を二つ発見！",
+    fallback:"✨",
+    asset:"dev-discovery",
+    playerSuffix:"が",
+    textBeforeImage:true,
+  },
+  devRoadBuilding:{
+    title:"街道を二本建てる！！",
+    fallback:"🛣️",
+    asset:"dev-road-building",
+    playerSuffix:"が",
+    textBeforeImage:true,
+  },
+  devVictoryPoint:{
+    title:"勝利点",
+    fallback:"⭐",
+    asset:"dev-victory-point",
+  },
+  robberAppears:{
+    title:"盗賊が現れた！",
+    fallback:"🐱",
+    asset:"robber",
+    hidePlayer:true,
+    textBeforeImage:true,
+    scene:"robberShake",
+  },
+  fishRemoveRobber:{
+    title:"盗賊を追い払った！",
+    fallback:"🐟",
+    asset:"fish-remove-robber",
+    playerSuffix:"が",
+    textBeforeImage:true,
+    scene:"fishChase",
+  },
+  fishSteal:{
+    title:"資源を奪った！",
+    fallback:"🎴",
+    asset:"fish-steal",
+    textBeforeImage:true,
+  },
 };
 
-function queueAwardEvent(type,playerId){
+function queueAwardEvent(type,playerId=null,details={}){
   if(!game || !AWARD_PRESENTATION[type]) return;
 
-  const player=playerById(playerId);
-  if(!player) return;
+  const player=
+    playerId===null || playerId===undefined
+      ?null
+      :playerById(playerId);
+
+  if(
+    playerId!==null &&
+    playerId!==undefined &&
+    !player
+  ){
+    return;
+  }
 
   if(!Array.isArray(game.awardEvents)){
     game.awardEvents=[];
   }
 
   game.awardEvents.push({
-    id:`${type}-${playerId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id:`${type}-${playerId??"system"}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     type,
     playerId,
-    playerName:player.name,
-    playerColor:player.color,
+    playerName:player?.name||"",
+    playerColor:player?.color||"#ffffff",
+    ...details,
     createdAt:Date.now(),
   });
 
-  game.awardEvents=game.awardEvents.slice(-24);
+  game.awardEvents=game.awardEvents.slice(-32);
 }
 
 function collectAwardAnnouncements(){
@@ -231,6 +302,24 @@ function hideAwardAnnouncement(){
   playNextAwardAnnouncement();
 }
 
+function awardSceneHtml(scene){
+  if(scene==="robberShake"){
+    return `<div class="robber-shake-scene">
+      <span class="robber-shake-icon">🐱</span>
+    </div>`;
+  }
+
+  if(scene==="fishChase"){
+    return `<div class="fish-chase-scene">
+      <span class="thrown-fish-icon">🐟</span>
+      <span class="chasing-robber-icon">🐱</span>
+      <span class="fish-throw-spark">💨</span>
+    </div>`;
+  }
+
+  return "";
+}
+
 function playNextAwardAnnouncement(){
   if(awardDisplayActive || !awardDisplayQueue.length) return;
 
@@ -251,44 +340,82 @@ function playNextAwardAnnouncement(){
   const title=$("awardAnnouncementTitle");
   const image=$("awardAnnouncementImage");
   const fallback=$("awardAnnouncementFallback");
+  const scene=$("awardAnnouncementScene");
 
   card.className=`award-announcement-card type-${event.type}`;
-  card.style.borderColor=event.playerColor||"#fff";
-  playerName.textContent=
+  card.classList.toggle(
+    "announcement-text-before-image",
+    !!meta.textBeforeImage
+  );
+  card.style.borderColor=
+    event.type==="robberAppears"
+      ?"#ffffff"
+      :(event.playerColor||"#ffffff");
+
+  const basePlayerName=
     event.playerName||
-    playerById(event.playerId)?.name||
+    (
+      event.playerId!==null &&
+      event.playerId!==undefined
+        ?playerById(event.playerId)?.name
+        :""
+    )||
     "プレイヤー";
-  title.textContent=meta.title;
-  fallback.textContent=meta.fallback;
-  fallback.classList.remove("hidden");
 
+  const playerLine=
+    event.playerLine ??
+    (
+      meta.hidePlayer
+        ?""
+        :`${basePlayerName}${meta.playerSuffix||""}`
+    );
+
+  playerName.textContent=playerLine;
+  playerName.classList.toggle("hidden",!playerLine);
+  title.textContent=event.title||meta.title;
+
+  image.onload=null;
+  image.onerror=null;
   image.classList.add("hidden");
-  image.alt=`${meta.title}の画像`;
+  fallback.classList.add("hidden");
+  scene.className="award-announcement-scene hidden";
+  scene.innerHTML="";
 
-  const candidates=[
-    `assets/awards/${meta.asset}.webp`,
-    `assets/awards/${meta.asset}.png`,
-    `assets/awards/${meta.asset}.svg`,
-  ];
+  if(meta.scene){
+    scene.innerHTML=awardSceneHtml(meta.scene);
+    scene.classList.remove("hidden");
+    scene.classList.add(`scene-${meta.scene}`);
+  }else{
+    fallback.textContent=meta.fallback;
+    fallback.classList.remove("hidden");
+    image.alt=`${event.title||meta.title}の画像`;
 
-  let candidateIndex=0;
+    const candidates=[
+      `assets/awards/${meta.asset}.webp`,
+      `assets/awards/${meta.asset}.png`,
+      `assets/awards/${meta.asset}.svg`,
+    ];
 
-  image.onload=()=>{
-    image.classList.remove("hidden");
-    fallback.classList.add("hidden");
-  };
+    let candidateIndex=0;
 
-  image.onerror=()=>{
-    candidateIndex++;
-    if(candidateIndex<candidates.length){
-      image.src=candidates[candidateIndex];
-    }else{
-      image.classList.add("hidden");
-      fallback.classList.remove("hidden");
-    }
-  };
+    image.onload=()=>{
+      image.classList.remove("hidden");
+      fallback.classList.add("hidden");
+    };
 
-  image.src=candidates[candidateIndex];
+    image.onerror=()=>{
+      candidateIndex++;
+      if(candidateIndex<candidates.length){
+        image.src=candidates[candidateIndex];
+      }else{
+        image.classList.add("hidden");
+        fallback.classList.remove("hidden");
+      }
+    };
+
+    image.src=candidates[candidateIndex];
+  }
+
   overlay.classList.remove("hidden");
 
   card.style.animation="none";
@@ -297,7 +424,7 @@ function playNextAwardAnnouncement(){
 
   awardDisplayTimer=setTimeout(
     hideAwardAnnouncement,
-    2100
+    2200
   );
 }
 
@@ -818,6 +945,7 @@ function grantFreeDevelopmentCard(player,reason="無料発展カード"){
   const card=game.devDeck.pop();
   player.dev.push(card);
   player.builtThisTurn=builtStateBefore;
+  queueAwardEvent("devDraw",player.id);
 
   log(`${reason}で発展カードを1枚引きました（通常建設回数は消費しません）。`);
   return true;
@@ -915,6 +1043,7 @@ function buyDev(playerId){
   const card=game.devDeck.pop();
   p.dev.push(card);
   p.builtThisTurn=true;
+  queueAwardEvent("devDraw",p.id);
   log(`${p.name}が発展カードを1枚購入しました。`);
   return true;
 }
@@ -1195,6 +1324,7 @@ function resolveDiceRoll(playerId,dice,afterResolve){
   const sum=dice[0]+dice[1];
   log(`${p.name}が ${sum} を出しました。`);
   if(sum===7){
+    queueAwardEvent("robberAppears");
     handleSeven(playerId,afterResolve);
     render();
     return;
@@ -1658,7 +1788,21 @@ function stealRandom(thiefId,victimId,reason="🐱"){
   RESOURCES.forEach(r=>{ for(let i=0;i<victim.resources[r];i++) pool.push(r); });
   if(!pool.length) return;
   const r=pool[rand(pool.length)];
-  victim.resources[r]--; thief.resources[r]++;
+  victim.resources[r]--;
+  thief.resources[r]++;
+
+  if(reason==="魚3匹"){
+    queueAwardEvent(
+      "fishSteal",
+      thief.id,
+      {
+        targetPlayerId:victim.id,
+        targetPlayerName:victim.name,
+        playerLine:`${thief.name}が${victim.name}から`,
+      }
+    );
+  }
+
   const visible=isLocalPlayer(thief)||isLocalPlayer(victim);
   showResourceDelta(thiefId,visible?{[r]:1}:{unknown:1},reason);
   showResourceDelta(victimId,visible?{[r]:-1}:{unknown:-1},reason);
@@ -2130,6 +2274,7 @@ function executeFishAction(action,target,payment){
   }[action]);
   if(action==="removeRobber"){
     game.robberHex=null;
+    queueAwardEvent("fishRemoveRobber",p.id);
     log("🐱を盤外へ追い出しました。");
   }else if(action==="steal"){
     stealRandom(p.id,target,"魚3匹");
@@ -2286,7 +2431,12 @@ function cpuUseFish(player){
       if(edges.length){ cpuSpendFish(player,5,"無料街道"); placeRoad(player.id,edges[0],true); log(`${player.name}が魚で無料街道を建てました。`); actions++; continue; }
     }
     if(robberHurtsPlayer(player)&&game.robberHex!==null&&findFishPayment(player.fishTokens,2)){
-      cpuSpendFish(player,2,"🐱を盤外へ"); game.robberHex=null; log(`${player.name}が魚で🐱を盤外へ追い出しました。`); actions++; continue;
+      cpuSpendFish(player,2,"🐱を盤外へ");
+      game.robberHex=null;
+      queueAwardEvent("fishRemoveRobber",player.id);
+      log(`${player.name}が魚で🐱を盤外へ追い出しました。`);
+      actions++;
+      continue;
     }
     if(findFishPayment(player.fishTokens,3)&&Math.random()<.35){
       const victim=chooseVictim(player.id);
@@ -2306,6 +2456,7 @@ function removeDevCard(player,card){
 function chooseYearOfPlentyResources(player,selected=[]){
   if(selected.length>=2){
     if(!removeDevCard(player,"yearOfPlenty")) return;
+    queueAwardEvent("devDiscovery",player.id);
     const delta={};
     for(const resource of selected){
       const got=gainResource(player,resource,1);
@@ -2345,6 +2496,7 @@ function playDev(card){
       "全プレイヤーから集める資源を選択してください。",
       resource=>{
         if(!removeDevCard(p,"monopoly")) return;
+        queueAwardEvent("devMonopoly",p.id);
         let amount=0;
         game.players.forEach(other=>{
           if(other.id===p.id) return;
@@ -2371,9 +2523,11 @@ function playDev(card){
 
   if(!removeDevCard(p,card)) return;
   if(card==="vp"){
+    queueAwardEvent("devVictoryPoint",p.id);
     p.revealedVP++;
     log(`${p.name}が勝利ポイントカードを公開しました。`);
   } else if(card==="knight"){
+    queueAwardEvent("devKnight",p.id);
     p.knightsPlayed++;
     updateAwards();
     game.phase="moveRobber";
@@ -2381,6 +2535,7 @@ function playDev(card){
     game.robberAfterKnight=true;
     log("騎士を使いました。🐱を移動してください。");
   } else if(card==="roadBuilding"){
+    queueAwardEvent("devRoadBuilding",p.id);
     game.freeRoads=Math.min(2,p.pieces.road);
     game.buildMode="road";
     log(`街道建設を使いました。無料で街道を${game.freeRoads}本置けます。`);
@@ -2657,6 +2812,7 @@ function cpuPlayVictoryPoint(p){
   const idx=p.dev.findIndex(c=>c==="vp");
   if(idx<0 || usableDevCount(p,"vp")<=0) return;
   p.dev.splice(idx,1);
+  queueAwardEvent("devVictoryPoint",p.id);
   p.revealedVP++;
   log(`${p.name}が勝利ポイントカードを公開しました。`);
   checkVictory();
@@ -2665,7 +2821,9 @@ function cpuPlayVictoryPoint(p){
 function cpuPlayKnight(p){
   const idx=p.dev.indexOf("knight");
   if(idx<0) return;
-  p.dev.splice(idx,1); p.knightsPlayed++;
+  p.dev.splice(idx,1);
+  queueAwardEvent("devKnight",p.id);
+  p.knightsPlayed++;
   updateAwards();
   log(`${p.name}が騎士を使いました。`);
   game.phase="moveRobber"; game.robberMover=p.id;

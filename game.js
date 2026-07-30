@@ -3463,28 +3463,40 @@ function renderSide(){
 
     const victoryPoints=publicVP(player);
 
+    const detailItems=[
+      `資源${totalResources(player)}`,
+      `発展${player.dev.length}`,
+      ...(game.fishermen?[`魚${player.fishTokens.length}枚`]:[]),
+      `勝利点${Math.max(0,player.revealedVP)}`,
+      `騎士${player.knightsPlayed}`,
+      `街道${player.longestRoad}`,
+      ...(awards?[awards]:[]),
+    ];
+
     return `<div class="player-card ${player.id===game.current?"current":""}">
       <span class="player-dot" style="background:${player.color}"></span>
-      <span>
-        ${player.name}
-        ${game.fishermen&&game.oldBootHolder===player.id
-          ?'<span class="boot-mark">ボロ靴</span>'
-          :""
-        }
-        <br>
-        <small>
-          資源${totalResources(player)}
-          / 発展${player.dev.length}
-          ${game.fishermen?` / 魚${player.fishTokens.length}枚`:""}
-          / 勝利点${Math.max(0,player.revealedVP)}
-          / 騎士${player.knightsPlayed}
-          / 街道${player.longestRoad}
-          ${awards?` / ${awards}`:""}
-        </small>
-      </span>
-      <b class="player-victory-points">
-        ${victoryPoints}/${victoryTarget(player)}点
-      </b>
+
+      <div class="player-card-main">
+        <div class="player-card-name-row">
+          <span class="player-card-name">
+            ${player.name}
+            ${game.fishermen&&game.oldBootHolder===player.id
+              ?'<span class="boot-mark">ボロ靴</span>'
+              :""
+            }
+          </span>
+        </div>
+
+        <div class="player-card-detail-row">
+          <small class="player-card-details">
+            ${detailItems.join(" / ")}
+          </small>
+
+          <b class="player-victory-points">
+            ${victoryPoints}/${victoryTarget(player)}点
+          </b>
+        </div>
+      </div>
     </div>`;
   }).join("");
   $("cpuTradeBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||!!game.pendingTrade;

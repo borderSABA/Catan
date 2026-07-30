@@ -3019,3 +3019,267 @@ input {
     font-size: 9px;
   }
 }
+
+
+/* v1.26：プレイヤー詳細を一列に収め、スクロールを廃止 */
+.players-panel {
+  overflow: hidden !important;
+}
+
+#players {
+  display: grid;
+  grid-template-columns: minmax(0,1fr);
+  grid-auto-rows: minmax(30px,auto);
+  align-content: start;
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+.player-card {
+  display: grid;
+  grid-template-columns: 12px minmax(0,1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 6px;
+  overflow: hidden;
+}
+
+.player-card-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.player-card-name {
+  flex: 0 0 auto;
+  max-width: 92px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-card-details {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-card .boot-mark {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 1px 4px;
+  font-size: 8px;
+  line-height: 1.15;
+  vertical-align: middle;
+}
+
+.player-card .player-victory-points {
+  min-width: 48px;
+  font-size: 12px;
+  line-height: 1;
+  text-align: right;
+}
+
+@media (min-width: 1500px) and (min-height: 850px) {
+  .players-panel {
+    min-height: 0;
+    overflow: hidden !important;
+  }
+
+  #players {
+    gap: 4px;
+  }
+
+  .player-card {
+    min-height: 32px;
+    padding: 4px 6px;
+  }
+
+  .player-card-name {
+    max-width: 105px;
+    font-size: 12px;
+  }
+
+  .player-card-details {
+    font-size: 10px;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1499px) {
+  .player-card {
+    gap: 4px;
+    padding: 3px 4px;
+  }
+
+  .player-card-name {
+    max-width: 78px;
+    font-size: 11px;
+  }
+
+  .player-card-details {
+    font-size: 9px;
+  }
+
+  .player-card .player-victory-points {
+    min-width: 43px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 720px) {
+  .players-panel {
+    overflow: visible !important;
+  }
+
+  #players {
+    overflow: visible !important;
+  }
+
+  .player-card-line {
+    gap: 5px;
+  }
+
+  .player-card-name {
+    max-width: 82px;
+    font-size: 11px;
+  }
+
+  .player-card-details {
+    font-size: 9px;
+  }
+}
+
+
+/* v1.27：プレイヤー名を1段目、詳細＋合計勝利点を2段目 */
+.player-card {
+  display: grid;
+  grid-template-columns: 12px minmax(0,1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  min-height: 42px;
+  padding: 4px 6px;
+  overflow: hidden;
+}
+
+.player-card-main {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.player-card-name-row {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.player-card-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-card-detail-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+
+.player-card-details {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-card .player-victory-points {
+  min-width: 50px;
+  font-size: 12px;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* v1.26の一列レイアウトを無効化 */
+.player-card-line {
+  display: contents;
+}
+
+@media (min-width: 1500px) and (min-height: 850px) {
+  .player-card {
+    min-height: 43px;
+    padding: 4px 6px;
+  }
+
+  .player-card-name {
+    font-size: 12px;
+  }
+
+  .player-card-details {
+    font-size: 10px;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1499px) {
+  .player-card {
+    min-height: 40px;
+    gap: 4px;
+    padding: 3px 4px;
+  }
+
+  .player-card-name {
+    font-size: 11px;
+  }
+
+  .player-card-details {
+    font-size: 9px;
+  }
+
+  .player-card .player-victory-points {
+    min-width: 44px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 720px) {
+  .player-card {
+    min-height: 41px;
+  }
+
+  .player-card-name {
+    font-size: 11px;
+  }
+
+  .player-card-details {
+    font-size: 9px;
+  }
+}

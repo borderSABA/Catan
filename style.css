@@ -493,7 +493,7 @@ button.active { outline: 3px solid #f59e0b; }
 .trade-confirm { color: #fff; border: 0; background: #15803d; }
 .trade-confirm:not(:disabled) { box-shadow: 0 0 0 4px #22c55e33; }
 
-@media(max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   .trade-editor-grid { grid-template-columns: 1fr; }
   .choice-options { grid-template-columns: repeat(2, 1fr); }
 }
@@ -1043,7 +1043,7 @@ input {
 }
 
 /* スマートフォン：盤面・操作・情報の3画面切替 */
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   body.online-game-mode {
     overflow: auto;
     overscroll-behavior-y: contain;
@@ -1594,7 +1594,7 @@ input {
   display: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   html,
   body {
     width: 100%;
@@ -1775,7 +1775,7 @@ input {
 
 
 /* v1.17：ロビーはスクロール可、対戦画面だけ固定 */
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   html.online-lobby-mode,
   body.online-lobby-mode {
     width: 100%;
@@ -1840,7 +1840,7 @@ input {
   display: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   /* X1-X19・Y3-Y17はクリップだけ。拡大・変形はしない */
   #gameMain.mobile-view-board #board,
   #gameMain.mobile-view-board .board-snapshot {
@@ -2255,7 +2255,7 @@ input {
   min-width: 150px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   /*
     操作タブからダイス枠と資源一覧枠を削除。
     ダイス枠は盤面内に常駐し、資源は上部の簡易表示だけ使う。
@@ -2337,7 +2337,7 @@ input {
 
 
 /* v1.20：スマホ上部の資源・駒ステータス */
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   .mobile-game-summary {
     gap: 5px;
     padding: 6px;
@@ -2502,7 +2502,7 @@ input {
 
 /* :has非対応ブラウザでも漁師時に5列になるようJS生成数に追従 */
 @supports not selector(:has(*)) {
-  @media (max-width: 720px) {
+  @media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
     .mobile-piece-counts {
       grid-template-columns: repeat(5,minmax(0,1fr));
     }
@@ -2534,7 +2534,7 @@ input {
 }
 
 /* スマホは上部ヘッダー自体を表示しないので、情報タブの枠を使用 */
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   .desktop-result-button {
     display: none !important;
   }
@@ -3010,7 +3010,7 @@ input {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   .resource-stock-column .resource {
     min-height: 48px;
   }
@@ -3141,7 +3141,7 @@ input {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   .players-panel {
     overflow: visible !important;
   }
@@ -3270,7 +3270,7 @@ input {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   .player-card {
     min-height: 41px;
   }
@@ -3327,9 +3327,635 @@ input {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (min-width: 721px) and (max-width: 1100px) and (orientation: portrait) {
   #players.fishermen-player-list .player-card-details {
     font-size: 7.5px;
     letter-spacing: -.05em;
+  }
+}
+
+
+/* v1.29：タブレットの向き別レイアウト */
+
+/*
+  横持ちタブレット：
+  PCと同じ「盤面＋右操作欄」だが、タブレット幅・高さへ圧縮。
+*/
+@media
+  (min-width: 721px)
+  and (max-width: 1366px)
+  and (orientation: landscape) {
+
+  html.online-game-mode,
+  body.online-game-mode {
+    width: 100%;
+    height: 100dvh !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  body.online-game-mode {
+    display: flex;
+    flex-direction: column;
+  }
+
+  body.online-game-mode #gameHeader {
+    flex: 0 0 48px;
+    width: 100%;
+    height: 48px;
+    min-height: 48px;
+    gap: 7px;
+    padding: 5px 8px;
+    overflow: hidden;
+  }
+
+  #gameHeader > div:first-child {
+    flex: 0 1 auto;
+    min-width: 128px;
+    overflow: hidden;
+  }
+
+  #gameHeader h1 {
+    overflow: hidden;
+    font-size: 16px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #gameHeader p {
+    display: none;
+  }
+
+  #gameHeader .version-badge {
+    margin-left: 2px;
+    padding: 1px 4px;
+    font-size: 8px;
+  }
+
+  .online-game-controls {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: nowrap !important;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .online-game-controls > span {
+    flex: 0 0 auto;
+    font-size: 9px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .online-game-controls .socket-state {
+    padding: 3px 5px;
+    font-size: 8px;
+  }
+
+  .online-game-controls button,
+  .online-game-controls .secondary,
+  .online-game-controls .desktop-result-button {
+    flex: 0 0 auto;
+    width: auto !important;
+    min-width: 0;
+    min-height: 31px;
+    margin: 0 !important;
+    padding: 4px 6px;
+    font-size: 9px;
+    line-height: 1;
+    white-space: nowrap !important;
+  }
+
+  .online-game-controls .desktop-result-button {
+    min-width: 96px;
+  }
+
+  body.online-game-mode .mobile-game-nav {
+    display: none !important;
+  }
+
+  body.online-game-mode #gameMain {
+    flex: 1 1 auto;
+    display: grid !important;
+    grid-template-columns:
+      minmax(0, 1fr)
+      clamp(410px, 44vw, 575px);
+    gap: 7px;
+    width: 100%;
+    max-width: none;
+    height: calc(100dvh - 48px);
+    min-height: 0;
+    margin: 0;
+    padding: 6px;
+    overflow: hidden !important;
+  }
+
+  #gameMain .board-wrap {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border-radius: 9px;
+  }
+
+  #gameMain #board,
+  #gameMain .board-snapshot {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  #gameMain aside {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    grid-template-rows:
+      auto
+      auto
+      auto
+      minmax(150px,1.35fr)
+      minmax(70px,.62fr);
+    align-content: stretch;
+    gap: 5px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden !important;
+  }
+
+  #gameMain .panel,
+  #gameMain .log-panel {
+    min-width: 0;
+    min-height: 0;
+    padding: 5px 6px;
+    border-radius: 7px;
+  }
+
+  #gameMain .panel h2,
+  #gameMain .log-panel h2 {
+    margin: 0 0 3px;
+    font-size: 11px;
+    line-height: 1.05;
+  }
+
+  #gameMain .turn-panel {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  #gameMain .resources-panel {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  #gameMain .build-panel {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  #gameMain .trade-panel {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  #gameMain .dev-panel {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  #gameMain .fish-panel {
+    grid-column: 1;
+    grid-row: 4;
+    min-height: 0;
+    overflow: hidden !important;
+  }
+
+  #gameMain .players-panel {
+    grid-column: 2;
+    grid-row: 4;
+    min-height: 0;
+    overflow: hidden !important;
+  }
+
+  #gameMain .fish-panel.hidden + .players-panel {
+    grid-column: 1 / -1;
+  }
+
+  #gameMain .side-log {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    margin: 0;
+    max-width: none;
+    overflow: hidden;
+  }
+
+  #phaseText {
+    min-height: 17px;
+    max-height: 21px;
+    overflow: hidden;
+    font-size: 9px;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #diceArea {
+    grid-template-columns:
+      30px
+      30px
+      minmax(75px,1fr)
+      minmax(67px,.82fr);
+    gap: 4px;
+  }
+
+  .dice {
+    width: 30px;
+    height: 30px;
+    border-width: 1px;
+    border-radius: 5px;
+    font-size: 17px;
+  }
+
+  #diceArea button {
+    min-height: 30px;
+    padding: 3px 4px;
+    font-size: 9px;
+    line-height: 1;
+  }
+
+  .resource-grid {
+    gap: 2px;
+  }
+
+  .resource-stock-column {
+    gap: 1px;
+  }
+
+  .resource-stock-column .resource {
+    min-height: 42px;
+    padding: 3px 1px;
+  }
+
+  .resource-stock-column .resource-name {
+    font-size: 8px;
+  }
+
+  .resource-stock-column .resource b {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .resource-stock-column .resource-bank-stock {
+    padding-top: 1px;
+    font-size: 7px;
+  }
+
+  .small-grid {
+    gap: 2px 5px;
+    margin-top: 3px;
+    font-size: 8px;
+    line-height: 1.05;
+  }
+
+  .button-grid {
+    gap: 3px;
+  }
+
+  .button-grid button {
+    min-height: 37px;
+    padding: 3px 2px;
+    font-size: 9px;
+    line-height: 1.05;
+  }
+
+  .button-grid small {
+    font-size: 6px;
+  }
+
+  .secondary {
+    margin-top: 2px;
+  }
+
+  #cancelModeBtn,
+  #bankTradeBtn,
+  #cpuTradeBtn,
+  #bootTransferBtn {
+    min-height: 27px;
+    margin-top: 2px;
+    padding: 3px 4px;
+    font-size: 8px;
+  }
+
+  .trade-row {
+    grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
+    gap: 2px;
+    margin-bottom: 2px;
+  }
+
+  .trade-row select {
+    min-width: 0;
+    height: 27px;
+    padding: 2px;
+    font-size: 8px;
+  }
+
+  #tradeRate {
+    font-size: 7px;
+    white-space: nowrap;
+  }
+
+  .dev-row {
+    gap: 3px;
+    padding: 1px 0;
+    font-size: 8px;
+    line-height: 1.05;
+  }
+
+  .dev-row button {
+    padding: 2px 4px;
+    font-size: 7px;
+  }
+
+  .fish-status {
+    margin-bottom: 2px;
+    font-size: 8px;
+    line-height: 1.1;
+  }
+
+  .fish-tokens {
+    gap: 2px;
+    min-height: 21px;
+  }
+
+  .fish-token {
+    padding: 2px 4px;
+    border-width: 1px;
+    font-size: 8px;
+  }
+
+  .fish-selection-row {
+    gap: 3px;
+    margin: 2px 0;
+    font-size: 8px;
+  }
+
+  .fish-clear {
+    padding: 2px 4px;
+    font-size: 7px;
+  }
+
+  .fish-action-grid {
+    gap: 2px;
+  }
+
+  .fish-action-grid button {
+    min-height: 26px;
+    padding: 2px;
+    font-size: 7px;
+    line-height: 1;
+  }
+
+  #players {
+    gap: 2px;
+    overflow: hidden !important;
+  }
+
+  .player-card {
+    min-height: 31px;
+    gap: 3px;
+    padding: 2px 3px;
+  }
+
+  .player-card-main {
+    gap: 0;
+  }
+
+  .player-card-name {
+    font-size: 8px;
+  }
+
+  .player-card-detail-row {
+    gap: 3px;
+  }
+
+  .player-card-details {
+    font-size: 6.75px;
+    letter-spacing: -.035em;
+  }
+
+  .player-card .player-victory-points {
+    min-width: 36px;
+    font-size: 8px;
+  }
+
+  .player-card .boot-mark {
+    padding: 0 3px;
+    font-size: 6px;
+  }
+
+  #log {
+    height: 100%;
+    max-height: none;
+    min-height: 0;
+    overflow: auto;
+    font-size: 8px;
+    line-height: 1.12;
+  }
+
+  .log-line {
+    padding: 1px 0;
+  }
+
+  .resource-pop-layer {
+    width: min(270px,48%);
+  }
+
+  .resource-pop {
+    padding: 5px 6px;
+  }
+}
+
+/* 高さが低い横持ちタブレットはさらに縦方向を圧縮 */
+@media
+  (min-width: 721px)
+  and (max-width: 1366px)
+  and (max-height: 650px)
+  and (orientation: landscape) {
+
+  body.online-game-mode #gameHeader {
+    flex-basis: 43px;
+    height: 43px;
+    min-height: 43px;
+  }
+
+  body.online-game-mode #gameMain {
+    height: calc(100dvh - 43px);
+    grid-template-columns:
+      minmax(0,1fr)
+      clamp(395px,45vw,545px);
+    gap: 5px;
+    padding: 4px;
+  }
+
+  #gameMain aside {
+    grid-template-rows:
+      auto
+      auto
+      auto
+      minmax(126px,1.25fr)
+      minmax(55px,.48fr);
+    gap: 3px;
+  }
+
+  #gameMain .panel,
+  #gameMain .log-panel {
+    padding: 4px 5px;
+  }
+
+  #gameMain .panel h2,
+  #gameMain .log-panel h2 {
+    font-size: 10px;
+  }
+
+  #phaseText {
+    display: none;
+  }
+
+  .resource-stock-column .resource {
+    min-height: 36px;
+  }
+
+  .button-grid button {
+    min-height: 31px;
+  }
+
+  .player-card {
+    min-height: 27px;
+  }
+
+  .fish-action-grid button {
+    min-height: 22px;
+  }
+}
+
+/*
+  縦持ちタブレット：
+  スマホと同じ3タブ方式だが、タブレット幅を活かして少し大きくする。
+*/
+@media
+  (min-width: 721px)
+  and (max-width: 1100px)
+  and (orientation: portrait) {
+
+  .mobile-game-nav:not([hidden]) {
+    padding: 7px 10px 8px;
+  }
+
+  .mobile-game-tabs {
+    gap: 8px;
+  }
+
+  .mobile-game-tabs button {
+    min-height: 48px;
+    padding: 8px;
+    font-size: 16px;
+  }
+
+  .mobile-game-summary {
+    gap: 5px;
+    margin-top: 7px;
+    padding: 7px 9px;
+  }
+
+  #mobileTurnSummary {
+    font-size: 12px;
+  }
+
+  .mobile-resource-counts,
+  .mobile-piece-counts,
+  .mobile-piece-counts:has(.fish-token-status) {
+    gap: 6px;
+  }
+
+  .mobile-status-item {
+    min-height: 42px;
+    padding: 5px 6px;
+  }
+
+  .resource-status .mobile-status-icon,
+  .resource-status b {
+    font-size: 22px;
+  }
+
+  .piece-status {
+    min-height: 46px;
+  }
+
+  .piece-status .mobile-status-icon {
+    font-size: 20px;
+  }
+
+  .mobile-status-label {
+    font-size: 10px;
+  }
+
+  .piece-status b {
+    font-size: 18px;
+  }
+
+  #gameMain.mobile-view-actions aside,
+  #gameMain.mobile-view-info aside {
+    padding: 11px;
+    gap: 10px;
+  }
+
+  #gameMain.mobile-view-actions .panel,
+  #gameMain.mobile-view-info .panel,
+  #gameMain.mobile-view-info .log-panel {
+    padding: 13px;
+  }
+
+  #gameMain.mobile-view-actions .panel h2,
+  #gameMain.mobile-view-info .panel h2,
+  #gameMain.mobile-view-info .log-panel h2 {
+    font-size: 17px;
+  }
+
+  .button-grid button {
+    min-height: 62px;
+    font-size: 14px;
+  }
+
+  .fish-action-grid button {
+    min-height: 50px;
+    font-size: 13px;
+  }
+
+  .player-card {
+    min-height: 47px;
+  }
+
+  .player-card-name {
+    font-size: 13px;
+  }
+
+  .player-card-details {
+    font-size: 10px;
+  }
+
+  .player-card .player-victory-points {
+    min-width: 55px;
+    font-size: 13px;
+  }
+
+  .choice-dialog,
+  .discard-dialog,
+  .trade-dialog,
+  .result-dialog {
+    width: min(760px,96vw);
+    max-height: 92dvh;
   }
 }

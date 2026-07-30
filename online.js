@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.28");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.29");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -269,11 +269,12 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.28";
+const APP_VERSION="v1.29";
 
 function isSmartphoneGameViewport(){
   return window.matchMedia(
     "(max-width: 720px), " +
+    "(min-width: 721px) and (max-width: 1100px) and (orientation: portrait), " +
     "(max-width: 950px) and (max-height: 520px) and (orientation: landscape)"
   ).matches;
 }
@@ -600,7 +601,21 @@ function initOnlineApp(){
   });
 
   window.addEventListener("orientationchange",()=>{
-    setTimeout(syncGameChromeForViewport,80);
+    setTimeout(()=>{
+      syncGameChromeForViewport();
+
+      if(typeof applyMobileBoardCrop==="function"){
+        applyMobileBoardCrop();
+      }
+
+      if(typeof syncMobileTurnPanelPlacement==="function"){
+        syncMobileTurnPanelPlacement();
+      }
+
+      if(typeof fitFishermenPlayerDetails==="function"){
+        fitFishermenPlayerDetails();
+      }
+    },120);
   });
   showLobbyScreen();
   const savedName=localStorage.getItem(ONLINE_STORAGE.name)||"";

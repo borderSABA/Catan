@@ -3693,7 +3693,14 @@ function setMobileGameView(view,scrollToTop=true){
   applyMobileBoardCrop();
   syncMobileTurnPanelPlacement();
 
-  if(scrollToTop && window.matchMedia("(max-width: 720px)").matches){
+  if(
+    scrollToTop &&
+    (
+      typeof isSmartphoneGameViewport==="function"
+        ?isSmartphoneGameViewport()
+        :window.matchMedia("(max-width: 720px)").matches
+    )
+  ){
     const aside=main?.querySelector("aside");
     if(aside) aside.scrollTop=0;
   }

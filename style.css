@@ -3959,3 +3959,125 @@ input {
     max-height: 92dvh;
   }
 }
+
+
+/* v1.30：縦持ちタブレットの盤面上部見切れ修正 */
+@media
+  (min-width: 721px)
+  and (max-width: 1100px)
+  and (orientation: portrait) {
+
+  /*
+    スマホ用のX1-X19・Y3-Y17切り取りを解除。
+    JS側でもclip-pathを外すが、CSSでも確実に上書きする。
+  */
+  #gameMain.mobile-view-board #board,
+  #gameMain.mobile-view-board .board-snapshot {
+    clip-path: none !important;
+    -webkit-clip-path: none !important;
+    transform: none !important;
+    transform-origin: center !important;
+  }
+
+  /*
+    ダイス枠が盤面の上へ被らないよう、上部に専用領域を確保。
+    その下の残り領域へ盤面全体を縦横比を保って収める。
+  */
+  #gameMain.mobile-view-board .board-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 82px 6px 6px;
+    overflow: hidden;
+  }
+
+  #gameMain.mobile-view-board #board,
+  #gameMain.mobile-view-board .board-snapshot {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+  }
+
+  #gameMain.mobile-view-board
+  .board-wrap > .turn-panel.mobile-board-turn-panel {
+    top: 7px;
+    left: 4%;
+    right: 4%;
+    min-height: 67px;
+    padding: 6px 8px;
+  }
+
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel h2 {
+    font-size: 12px;
+  }
+
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel #phaseText {
+    max-height: 17px;
+    font-size: 9px;
+  }
+
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel #diceArea {
+    grid-template-columns:
+      37px
+      37px
+      minmax(120px,1fr)
+      minmax(105px,.85fr);
+    gap: 6px;
+  }
+
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel .dice {
+    width: 37px;
+    height: 37px;
+    font-size: 21px;
+  }
+
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel #rollBtn,
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel #endTurnBtn {
+    min-height: 37px;
+    font-size: 12px;
+  }
+
+  /* 資源変動POUもダイス枠の下から表示 */
+  #gameMain.mobile-view-board .resource-pop-layer {
+    top: 88px;
+    max-height: calc(100% - 100px);
+  }
+}
+
+/* 高さが短い縦持ちタブレットでは予約領域を少し圧縮 */
+@media
+  (min-width: 721px)
+  and (max-width: 1100px)
+  and (max-height: 900px)
+  and (orientation: portrait) {
+
+  #gameMain.mobile-view-board .board-wrap {
+    padding-top: 72px;
+  }
+
+  #gameMain.mobile-view-board
+  .board-wrap > .turn-panel.mobile-board-turn-panel {
+    top: 4px;
+    min-height: 60px;
+    padding: 4px 7px;
+  }
+
+  #gameMain.mobile-view-board
+  .mobile-board-turn-panel #phaseText {
+    display: none;
+  }
+
+  #gameMain.mobile-view-board .resource-pop-layer {
+    top: 76px;
+    max-height: calc(100% - 86px);
+  }
+}

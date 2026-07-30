@@ -3607,11 +3607,19 @@ function mobileBoardCropInset(){
   };
 }
 
+function shouldCropMobileBoard(){
+  return window.matchMedia(
+    "(max-width: 720px), " +
+    "(max-width: 950px) and (max-height: 520px) and (orientation: landscape)"
+  ).matches;
+}
+
 function applyMobileBoardCrop(){
-  const smartphone=
-    typeof isSmartphoneGameViewport==="function"
-      ?isSmartphoneGameViewport()
-      :window.matchMedia("(max-width: 720px)").matches;
+  /*
+    縦持ちタブレットはスマホ式タブUIを使うが、
+    スマホ向けのX1-X19・Y3-Y17切り取りは適用しない。
+  */
+  const shouldCrop=shouldCropMobileBoard();
 
   const targets=[
     $("board"),
@@ -3628,7 +3636,7 @@ function applyMobileBoardCrop(){
     target.style.removeProperty("transform");
     target.style.removeProperty("transform-origin");
 
-    if(smartphone){
+    if(shouldCrop){
       target.style.setProperty("clip-path",clipValue);
       target.style.setProperty("-webkit-clip-path",clipValue);
     }else{

@@ -3283,3 +3283,53 @@ input {
     font-size: 9px;
   }
 }
+
+
+/* v1.28：詳細欄の最長街道・漁師時の全項目表示 */
+#players.fishermen-player-list .player-card-detail-row {
+  gap: 4px;
+}
+
+#players.fishermen-player-list .player-card-details {
+  overflow: visible;
+  color: #475569;
+  font-size: 8.5px;
+  letter-spacing: -.03em;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+#players.fishermen-player-list .player-victory-points {
+  position: relative;
+  z-index: 2;
+  background: inherit;
+}
+
+@media (min-width: 1500px) and (min-height: 850px) {
+  #players.fishermen-player-list .player-card-details {
+    font-size: 8.5px;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1499px) {
+  #players.fishermen-player-list .player-card-detail-row {
+    gap: 3px;
+  }
+
+  #players.fishermen-player-list .player-card-details {
+    font-size: 7.75px;
+    letter-spacing: -.045em;
+  }
+
+  #players.fishermen-player-list .player-victory-points {
+    min-width: 42px;
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 720px) {
+  #players.fishermen-player-list .player-card-details {
+    font-size: 7.5px;
+    letter-spacing: -.05em;
+  }
+}

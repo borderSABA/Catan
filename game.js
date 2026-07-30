@@ -3391,6 +3391,59 @@ function renderFishPanel(){
   $("bootTransferBtn").disabled=!canAct||game.oldBootHolder!==localPlayerId()||!eligibleBootRecipients(human).length;
 }
 
+function fitFishermenPlayerDetails(){
+  const playersElement=$("players");
+  if(!playersElement) return;
+
+  const details=[
+    ...playersElement.querySelectorAll(".player-card-details"),
+  ];
+
+  for(const detail of details){
+    detail.style.removeProperty("font-size");
+    detail.style.removeProperty("letter-spacing");
+    detail.style.removeProperty("transform");
+    detail.style.removeProperty("transform-origin");
+
+    if(!game?.fishermen){
+      continue;
+    }
+
+    /*
+      漁師拡張では項目が1つ増えるため、
+      まず文字を少し小さくし、それでも入らない場合だけ
+      横方向をわずかに縮めて全項目を残す。
+    */
+    let fontSize=8.5;
+    detail.style.fontSize=`${fontSize}px`;
+    detail.style.letterSpacing="-0.03em";
+
+    while(
+      detail.scrollWidth>detail.clientWidth &&
+      fontSize>6.75
+    ){
+      fontSize-=0.25;
+      detail.style.fontSize=`${fontSize}px`;
+    }
+
+    if(
+      detail.clientWidth>0 &&
+      detail.scrollWidth>detail.clientWidth
+    ){
+      const scale=Math.max(
+        0.72,
+        Math.min(
+          1,
+          detail.clientWidth/detail.scrollWidth
+        )
+      );
+
+      detail.style.transformOrigin="left center";
+      detail.style.transform=`scaleX(${scale})`;
+    }
+  }
+}
+
 function renderSide(){
   const human=localPlayer(), cp=currentPlayer();
   renderFishPanel();
@@ -3455,7 +3508,13 @@ function renderSide(){
   }).join("");
   document.querySelectorAll("[data-dev]").forEach(b=>b.addEventListener("click",()=>playDev(b.dataset.dev)));
 
-  $("players").innerHTML=game.players.map(player=>{
+  const playersElement=$("players");
+  playersElement.classList.toggle(
+    "fishermen-player-list",
+    !!game.fishermen
+  );
+
+  playersElement.innerHTML=game.players.map(player=>{
     const awards=[
       player.hasLongestRoad?"最長交易路":null,
       player.hasLargestArmy?"最大騎士団":null,
@@ -3469,7 +3528,7 @@ function renderSide(){
       ...(game.fishermen?[`魚${player.fishTokens.length}枚`]:[]),
       `勝利点${Math.max(0,player.revealedVP)}`,
       `騎士${player.knightsPlayed}`,
-      `街道${player.longestRoad}`,
+      `最長${player.longestRoad}`,
       ...(awards?[awards]:[]),
     ];
 
@@ -3499,6 +3558,9 @@ function renderSide(){
       </div>
     </div>`;
   }).join("");
+
+  fitFishermenPlayerDetails();
+
   $("cpuTradeBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||!!game.pendingTrade;
 
   const finished=game.winner!==null;
@@ -3727,6 +3789,7 @@ function setupResponsiveGameUi(){
   window.addEventListener("resize",()=>{
     applyMobileBoardCrop();
     syncMobileTurnPanelPlacement();
+    fitFishermenPlayerDetails();
   });
 
   window.addEventListener("orientationchange",()=>{

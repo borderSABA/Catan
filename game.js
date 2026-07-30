@@ -3476,7 +3476,7 @@ function renderSide(){
           資源${totalResources(player)}
           / 発展${player.dev.length}
           ${game.fishermen?` / 魚${player.fishTokens.length}枚`:""}
-          / 勝利点${victoryPoints}
+          / 勝利点${Math.max(0,player.revealedVP)}
           / 騎士${player.knightsPlayed}
           / 街道${player.longestRoad}
           ${awards?` / ${awards}`:""}

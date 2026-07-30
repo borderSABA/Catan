@@ -106,7 +106,7 @@ button.active { outline: 3px solid #f59e0b; }
 .resource-pop {
   background: #fffffff2; border-radius: 10px; padding: 9px 11px;
   border-left: 7px solid var(--player-color); box-shadow: 0 5px 15px #0004;
-  animation: resourcePop 2.8s ease forwards;
+  animation: resourcePop 2s ease forwards;
 }
 .resource-pop-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 900; font-size: 13px; }
 .resource-pop-reason { color: #6b7280; font-weight: 600; font-size: 11px; }
@@ -847,7 +847,7 @@ body.online-game-mode {
   box-shadow:
     0 30px 90px rgba(0,0,0,.58),
     inset 0 0 38px rgba(255,255,255,.08);
-  animation: awardAnnouncementIn 2.05s ease both;
+  animation: awardAnnouncementIn 2s ease both;
 }
 
 .award-announcement-player {
@@ -4080,4 +4080,33 @@ input {
     top: 76px;
     max-height: calc(100% - 86px);
   }
+}
+
+
+/* v1.33：盗賊移動中は数字チップもタイル選択対象 */
+.robber-click-target {
+  cursor: pointer;
+}
+
+.number-token.robber-click-target,
+.lake-number.robber-click-target {
+  stroke: #ffffff;
+  stroke-width: 4;
+  filter:
+    brightness(1.08)
+    drop-shadow(0 0 5px rgba(255,255,255,.9));
+}
+
+.number-token.robber-click-target:hover,
+.lake-number.robber-click-target:hover {
+  filter:
+    brightness(1.2)
+    drop-shadow(0 0 8px rgba(255,255,255,1));
+}
+
+.number-text.robber-click-target,
+.pip-text.robber-click-target,
+.lake-number-text.robber-click-target,
+.fishing-ground-fish.robber-click-target {
+  cursor: pointer;
 }

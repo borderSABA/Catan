@@ -31,6 +31,7 @@ let tradeDraft = null;
 let shownPendingTradeId = null;
 const locallyResolvedTradeIds = new Set();
 const shownAwardEventIds = new Set();
+const shownResourcePopEventIds = new Set();
 const awardDisplayQueue = [];
 let awardDisplayActive = false;
 let awardDisplayTimer = null;
@@ -424,7 +425,7 @@ function playNextAwardAnnouncement(){
 
   awardDisplayTimer=setTimeout(
     hideAwardAnnouncement,
-    2200
+    2000
   );
 }
 
@@ -540,25 +541,161 @@ function openResourceChoice(title,guide,onSelect,{amountLabel="銀行在庫",fil
   openChoiceModal({title,guide,options,onSelect,allowCancel:true});
 }
 
-function showResourceDelta(playerId,delta,reason="資源変動"){
-  const entries=Object.entries(delta).filter(([,n])=>n!==0);
-  if(!entries.length || !game) return;
-  const p=playerById(playerId);
+function normalizedResourceDelta(delta){
+  if(!delta || typeof delta!=="object") return {};
+
+  return Object.fromEntries(
+    Object.entries(delta)
+      .map(([resource,amount])=>[
+        resource,
+        Number(amount)||0,
+      ])
+      .filter(([,amount])=>amount!==0)
+  );
+}
+
+function resourcePopDeltaForViewer(event){
+  const privatePlayerIds=
+    Array.isArray(event.privatePlayerIds)
+      ?event.privatePlayerIds
+      :null;
+
+  if(
+    privatePlayerIds &&
+    event.publicDelta &&
+    typeof event.publicDelta==="object"
+  ){
+    const viewerId=
+      typeof localPlayerId==="function"
+        ?localPlayerId()
+        :0;
+
+    if(!privatePlayerIds.includes(viewerId)){
+      return normalizedResourceDelta(event.publicDelta);
+    }
+  }
+
+  return normalizedResourceDelta(event.delta);
+}
+
+function renderResourcePopEvent(event){
   const layer=$("resourcePopLayer");
-  if(!layer) return;
+  if(!layer || !event) return;
+
+  const delta=resourcePopDeltaForViewer(event);
+  const entries=Object.entries(delta);
+
+  if(!entries.length) return;
+
   const pop=document.createElement("div");
   pop.className="resource-pop";
-  pop.style.setProperty("--player-color",p.color);
-  const detail=entries.map(([r,n])=>{
-    const icon=RESOURCE_ICON[r]||"🎴";
-    const sign=n>0?`+${n}`:`${n}`;
-    const cls=n>0?"resource-plus":"resource-minus";
-    return `<span class="${cls}">${icon}${sign}</span>`;
+  pop.dataset.resourcePopEventId=event.id||"";
+  pop.style.setProperty(
+    "--player-color",
+    event.playerColor||"#64748b"
+  );
+
+  const detail=entries.map(([resource,amount])=>{
+    const icon=RESOURCE_ICON[resource]||"🎴";
+    const sign=amount>0?`+${amount}`:`${amount}`;
+    const className=
+      amount>0
+        ?"resource-plus"
+        :"resource-minus";
+
+    return `<span class="${className}">${icon}${sign}</span>`;
   }).join("　");
-  pop.innerHTML=`<div class="resource-pop-title"><span>${p.name}</span><span class="resource-pop-reason">${reason}</span></div><div class="resource-pop-delta">${detail}</div>`;
+
+  pop.innerHTML=
+    `<div class="resource-pop-title">`+
+      `<span>${escapeHtml(event.playerName||"プレイヤー")}</span>`+
+      `<span class="resource-pop-reason">`+
+        `${escapeHtml(event.reason||"資源変動")}`+
+      `</span>`+
+    `</div>`+
+    `<div class="resource-pop-delta">${detail}</div>`;
+
   layer.prepend(pop);
-  while(layer.children.length>6) layer.lastElementChild.remove();
-  setTimeout(()=>pop.remove(),2900);
+
+  while(layer.children.length>6){
+    layer.lastElementChild.remove();
+  }
+
+  setTimeout(()=>pop.remove(),2000);
+}
+
+function collectResourcePopEvents(){
+  if(!game || !Array.isArray(game.resourcePopEvents)) return;
+
+  for(const event of game.resourcePopEvents){
+    if(
+      !event?.id ||
+      shownResourcePopEventIds.has(event.id)
+    ){
+      continue;
+    }
+
+    shownResourcePopEventIds.add(event.id);
+    renderResourcePopEvent(event);
+  }
+}
+
+function showResourceDelta(
+  playerId,
+  delta,
+  reason="資源変動",
+  options={}
+){
+  const normalizedDelta=normalizedResourceDelta(delta);
+
+  if(!Object.keys(normalizedDelta).length || !game) return;
+
+  const player=playerById(playerId);
+  if(!player) return;
+
+  if(!Array.isArray(game.resourcePopEvents)){
+    game.resourcePopEvents=[];
+  }
+
+  const event={
+    id:
+      `resource-${playerId}-${Date.now()}-`+
+      `${Math.random().toString(36).slice(2)}`,
+    playerId,
+    playerName:player.name,
+    playerColor:player.color,
+    delta:normalizedDelta,
+    reason,
+    createdAt:Date.now(),
+  };
+
+  if(Array.isArray(options.privatePlayerIds)){
+    event.privatePlayerIds=[
+      ...new Set(
+        options.privatePlayerIds
+          .map(Number)
+          .filter(Number.isInteger)
+      ),
+    ];
+  }
+
+  if(
+    options.publicDelta &&
+    typeof options.publicDelta==="object"
+  ){
+    event.publicDelta=
+      normalizedResourceDelta(options.publicDelta);
+  }
+
+  game.resourcePopEvents.push(event);
+  game.resourcePopEvents=
+    game.resourcePopEvents.slice(-48);
+
+  /*
+    操作した本人には即時表示。
+    他の参加者には次のゲーム状態同期で同じイベントが届く。
+  */
+  collectResourcePopEvents();
 }
 
 function resetPopups(){
@@ -597,6 +734,7 @@ function newGame(){
   cpuActionRunning=false;
   cpuScheduledKey=null;
   shownAwardEventIds.clear();
+  shownResourcePopEventIds.clear();
   awardDisplayQueue.length=0;
   awardDisplayActive=false;
   clearTimeout(awardDisplayTimer);
@@ -650,6 +788,7 @@ function newGame(){
     pendingTrade:null,
     resolvedTradeIds:[],
     awardEvents:[],
+    resourcePopEvents:[],
     discardQueue:[],
     discardPlayerId:null,
     pendingFishDraws:[],
@@ -1666,7 +1805,15 @@ function confirmDiscard(){
     game.bank[r]+=n;
     removed[r]=-n;
   }
-  showResourceDelta(player.id,removed,"7の破棄");
+  showResourceDelta(
+    player.id,
+    removed,
+    "7の破棄",
+    {
+      privatePlayerIds:[player.id],
+      publicDelta:{unknown:-discardSelection.need},
+    }
+  );
   log(`${player.name}は資源を${discardSelection.need}枚捨てました。`);
   discardSelection=null;
   hideDiscardModal();
@@ -1803,9 +1950,28 @@ function stealRandom(thiefId,victimId,reason="🐱"){
     );
   }
 
-  const visible=isLocalPlayer(thief)||isLocalPlayer(victim);
-  showResourceDelta(thiefId,visible?{[r]:1}:{unknown:1},reason);
-  showResourceDelta(victimId,visible?{[r]:-1}:{unknown:-1},reason);
+  const privatePlayerIds=[thiefId,victimId];
+
+  showResourceDelta(
+    thiefId,
+    {[r]:1},
+    reason,
+    {
+      privatePlayerIds,
+      publicDelta:{unknown:1},
+    }
+  );
+
+  showResourceDelta(
+    victimId,
+    {[r]:-1},
+    reason,
+    {
+      privatePlayerIds,
+      publicDelta:{unknown:-1},
+    }
+  );
+
   log(`${thief.name}が${reason==="🐱"?"🐱で":"魚の効果で"}${victim.name}から資源を1枚奪いました。`);
 }
 function cpuMoveRobber(playerId){
@@ -2993,9 +3159,34 @@ function render(){
   renderBoard();
   renderSide();
   renderLog();
+  collectResourcePopEvents();
   collectAwardAnnouncements();
   scheduleFinalResultIfNeeded();
   onlineAfterRender();
+}
+
+function bindRobberHexTarget(element,hexId){
+  if(
+    !element ||
+    game.phase!=="moveRobber" ||
+    !isLocalTurn()
+  ){
+    return;
+  }
+
+  element.classList.add("robber-click-target");
+
+  element.addEventListener("click",event=>{
+    event.preventDefault();
+    event.stopPropagation();
+
+    if(hexId!==game.robberHex){
+      moveRobberTo(
+        hexId,
+        currentPlayer().id
+      );
+    }
+  });
 }
 
 function renderBoard(){
@@ -3044,7 +3235,7 @@ function renderBoard(){
     const poly=createSvg("polygon",{points:pts,class:`hex tile-${h.resource}`});
     if(game.phase==="moveRobber" && isLocalTurn()){
       poly.classList.add("robber-target");
-      poly.addEventListener("click",()=>{ if(h.id!==game.robberHex) moveRobberTo(h.id,currentPlayer().id); });
+      bindRobberHexTarget(poly,h.id);
     }
     svg.appendChild(poly);
 
@@ -3101,18 +3292,66 @@ function renderBoard(){
       const positions=nums.length===4?[[-18,-18],[18,-18],[-18,18],[18,18]]:[[-20,0],[20,0]];
       nums.forEach((num,i)=>{
         const [ox,oy]=positions[i];
-        svg.appendChild(createSvg("circle",{cx:h.x+ox,cy:h.y+oy,r:game.board.large?14:16,class:"lake-number"}));
-        const t=createSvg("text",{x:h.x+ox,y:h.y+oy+1,class:"lake-number-text",style:`font-size:${game.board.large?13:15}px`});
-        t.textContent=num; svg.appendChild(t);
+
+        const lakeToken=createSvg("circle",{
+          cx:h.x+ox,
+          cy:h.y+oy,
+          r:game.board.large?14:16,
+          class:"lake-number",
+        });
+        bindRobberHexTarget(lakeToken,h.id);
+        svg.appendChild(lakeToken);
+
+        const lakeText=createSvg("text",{
+          x:h.x+ox,
+          y:h.y+oy+1,
+          class:"lake-number-text",
+          style:`font-size:${game.board.large?13:15}px`,
+        });
+        lakeText.textContent=num;
+        bindRobberHexTarget(lakeText,h.id);
+        svg.appendChild(lakeText);
       });
-      const fish=createSvg("text",{x:h.x,y:h.y+(nums.length===4?0:28),class:"fishing-ground-fish",style:`font-size:${game.board.large?18:22}px`});
-      fish.textContent="🐟"; svg.appendChild(fish);
+
+      const fish=createSvg("text",{
+        x:h.x,
+        y:h.y+(nums.length===4?0:28),
+        class:"fishing-ground-fish",
+        style:`font-size:${game.board.large?18:22}px`,
+      });
+      fish.textContent="🐟";
+      bindRobberHexTarget(fish,h.id);
+      svg.appendChild(fish);
     }else if(h.number){
-      svg.appendChild(createSvg("circle",{cx:h.x,cy:h.y,r:tokenRadius,class:"number-token"}));
-      const t=createSvg("text",{x:h.x,y:h.y-3,class:`number-text ${[6,8].includes(h.number)?"hot-number":""}`,style:`font-size:${numberSize}px`});
-      t.textContent=h.number; svg.appendChild(t);
-      const p=createSvg("text",{x:h.x,y:h.y+(game.board.large?14:17),class:"pip-text"});
-      p.textContent="•".repeat(PIPS[h.number]); svg.appendChild(p);
+      const numberToken=createSvg("circle",{
+        cx:h.x,
+        cy:h.y,
+        r:tokenRadius,
+        class:"number-token",
+      });
+      bindRobberHexTarget(numberToken,h.id);
+      svg.appendChild(numberToken);
+
+      const numberText=createSvg("text",{
+        x:h.x,
+        y:h.y-3,
+        class:
+          `number-text `+
+          `${[6,8].includes(h.number)?"hot-number":""}`,
+        style:`font-size:${numberSize}px`,
+      });
+      numberText.textContent=h.number;
+      bindRobberHexTarget(numberText,h.id);
+      svg.appendChild(numberText);
+
+      const pipText=createSvg("text",{
+        x:h.x,
+        y:h.y+(game.board.large?14:17),
+        class:"pip-text",
+      });
+      pipText.textContent="•".repeat(PIPS[h.number]);
+      bindRobberHexTarget(pipText,h.id);
+      svg.appendChild(pipText);
     }
     if(game.robberHex===h.id){
       const cat=createSvg("text",{x:h.x,y:h.y+7,class:"robber-cat",style:`font-size:${game.board.large?34:42}px`});

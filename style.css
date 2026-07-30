@@ -2508,3 +2508,174 @@ input {
     }
   }
 }
+
+
+/* v1.21：PCリザルト位置・漁師／プレイヤー欄・銀行在庫 */
+.desktop-result-button {
+  width: auto;
+  min-width: 132px;
+  margin: 0;
+  padding: 6px 11px;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #1f2937;
+  white-space: nowrap;
+}
+
+.desktop-result-button:hover:not(:disabled) {
+  background: #e8eef5;
+}
+
+/* PC・タブレットでは上部バーへ移動したため、右側の枠は消す */
+@media (min-width: 721px) {
+  .result-panel {
+    display: none !important;
+  }
+}
+
+/* スマホは上部ヘッダー自体を表示しないので、情報タブの枠を使用 */
+@media (max-width: 720px) {
+  .desktop-result-button {
+    display: none !important;
+  }
+}
+
+/* 自分の所持数と銀行在庫 */
+.resource {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  align-content: center;
+  gap: 2px;
+}
+
+.resource-name {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-own-count {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 4px;
+}
+
+.resource-own-count small {
+  color: #475569;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.resource-own-count b {
+  display: inline;
+}
+
+.resource-bank-stock {
+  display: block;
+  padding: 2px 3px;
+  border-radius: 5px;
+  background: rgba(255,255,255,.62);
+  color: #334155;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+/*
+  1920×1080向け：
+  サイドのリザルト枠が消えた分を漁師とプレイヤーへ配分する。
+*/
+@media (min-width: 1500px) and (min-height: 850px) {
+  aside {
+    grid-template-rows:
+      auto
+      auto
+      auto
+      minmax(235px, 1.45fr)
+      minmax(95px, .55fr);
+  }
+
+  .fish-panel,
+  .players-panel {
+    min-height: 235px;
+    padding: 10px;
+  }
+
+  .fish-panel {
+    grid-column: 1;
+    grid-row: 4;
+    overflow: auto;
+  }
+
+  .players-panel {
+    grid-column: 2;
+    grid-row: 4;
+    overflow: auto;
+  }
+
+  /* 漁師拡張なしならプレイヤー欄を横幅いっぱいにする */
+  .fish-panel.hidden + .players-panel {
+    grid-column: 1 / -1;
+  }
+
+  .fish-status {
+    font-size: 13px;
+  }
+
+  .fish-tokens {
+    gap: 7px;
+    min-height: 37px;
+  }
+
+  .fish-token {
+    padding: 5px 9px;
+    font-size: 13px;
+  }
+
+  .fish-action-grid button {
+    min-height: 40px;
+    font-size: 12px;
+  }
+
+  .player-card {
+    padding: 7px 5px;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .player-card small {
+    font-size: 11px;
+  }
+
+  .resource {
+    min-height: 67px;
+  }
+
+  .resource-name {
+    font-size: 11px;
+  }
+
+  .resource-own-count b {
+    font-size: 19px;
+  }
+
+  .resource-bank-stock {
+    font-size: 9px;
+  }
+}
+
+/* 一般的なPC幅でも漁師・プレイヤー欄を少し広げる */
+@media (min-width: 1101px) and (max-width: 1499px) {
+  .fish-panel,
+  .players-panel {
+    min-height: 210px;
+  }
+
+  .resource {
+    min-height: 66px;
+  }
+}

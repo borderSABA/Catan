@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.20（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.20">
+  <title>カタン オンライン v1.21（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.21">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.20</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.21</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -68,10 +68,11 @@
 
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.20</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.21</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
+      <button id="desktopResultBtn" class="secondary desktop-result-button">途中経過を見る</button>
       <span id="currentRoomLabel">未接続</span>
       <span id="onlineSocketState" class="socket-state">接続確認中</span>
       <button id="returnLobbyBtn" class="secondary">ロビーへ戻す</button>
@@ -113,7 +114,7 @@
       </section>
 
       <section class="panel resources-panel">
-        <h2>あなたの資源</h2>
+        <h2>あなたの資源・銀行在庫</h2>
         <div id="resourceCards" class="resource-grid"></div>
         <div id="pieceCounts" class="small-grid"></div>
       </section>
@@ -271,8 +272,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.20"></script>
-  <script src="online.js?version=v1.20"></script>
-  <script src="game.js?version=v1.20"></script>
+  <script src="config.js?version=v1.21"></script>
+  <script src="online.js?version=v1.21"></script>
+  <script src="game.js?version=v1.21"></script>
 </body>
 </html>

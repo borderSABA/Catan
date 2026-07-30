@@ -3266,7 +3266,18 @@ function renderSide(){
   $("rollBtn").disabled=!isLocalTurn()||game.phase!=="turn"||game.rolled||game.winner!==null||game.diceRolling;
   $("endTurnBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||game.freeRoads>0||game.winner!==null||game.diceRolling;
 
-  $("resourceCards").innerHTML=RESOURCES.map(r=>`<div class="resource ${r}">${RESOURCE_ICON[r]} ${RESOURCE_JA[r]}<b>${human.resources[r]}</b></div>`).join("");
+  $("resourceCards").innerHTML=RESOURCES.map(resource=>
+    `<div class="resource ${resource}">
+      <span class="resource-name">${RESOURCE_ICON[resource]} ${RESOURCE_JA[resource]}</span>
+      <span class="resource-own-count">
+        <small>所持</small>
+        <b>${Math.max(0,human.resources[resource])}</b>
+      </span>
+      <span class="resource-bank-stock">
+        銀行在庫 ${Math.max(0,game.bank[resource])}
+      </span>
+    </div>`
+  ).join("");
   $("pieceCounts").innerHTML=`<span>街道駒 ${human.pieces.road}</span><span>開拓地駒 ${human.pieces.settlement}</span><span>都市駒 ${human.pieces.city}</span><span>資源計 ${totalResources(human)}</span><span>発展山札 ${game.devDeck.length}</span>`;
   document.querySelectorAll("[data-action]").forEach(b=>{
     b.classList.toggle("active",game.buildMode===b.dataset.action);
@@ -3295,9 +3306,17 @@ function renderSide(){
   $("cpuTradeBtn").disabled=!isLocalTurn()||game.phase!=="turn"||!game.rolled||!!game.pendingTrade;
 
   const finished=game.winner!==null;
-  $("resultBtn").textContent=finished
+  const resultButtonText=finished
     ?"最終リザルトを見る"
     :"途中経過を見る";
+
+  $("resultBtn").textContent=resultButtonText;
+
+  const desktopResultButton=$("desktopResultBtn");
+  if(desktopResultButton){
+    desktopResultButton.textContent=resultButtonText;
+  }
+
   $("resultPanelGuide").textContent=finished
     ?"最終順位とゲーム全体のダイス結果を確認できます。"
     :"途中経過ではダイスの出目だけ確認できます。";
@@ -3574,6 +3593,7 @@ $("choiceCancelBtn").addEventListener("click",()=>{
 $("tradeCancelBtn").addEventListener("click",closeTradeModal);
 $("tradeConfirmBtn").addEventListener("click",submitPlayerTrade);
 $("resultBtn").addEventListener("click",openResultModal);
+$("desktopResultBtn").addEventListener("click",openResultModal);
 $("resultCloseBtn").addEventListener("click",closeResultModal);
 $("resultCloseTopBtn").addEventListener("click",closeResultModal);
 $("resultModal").addEventListener("click",event=>{

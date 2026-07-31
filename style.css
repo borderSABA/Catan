@@ -4315,3 +4315,30 @@ input {
     opacity: 1;
   }
 }
+
+
+/* v1.37：建設内容は自分のターン以外でも通常表示 */
+.build-panel .button-grid button:disabled {
+  opacity: 1;
+  filter: none;
+  color: #111827;
+  background: #ffffff;
+  border-color: #9ca3af;
+  cursor: default;
+  -webkit-text-fill-color: #111827;
+}
+
+.build-panel .button-grid button:disabled small {
+  color: #4b5563;
+  opacity: 1;
+  -webkit-text-fill-color: #4b5563;
+}
+
+/*
+  押せないことはカーソルと操作禁止で維持する。
+  マウスオーバーしても明るさを変えない。
+*/
+.build-panel .button-grid button:disabled:hover {
+  filter: none;
+  background: #ffffff;
+}

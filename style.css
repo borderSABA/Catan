@@ -4246,3 +4246,72 @@ input {
     font-size: clamp(23px,6vw,40px);
   }
 }
+
+
+/* v1.35：配置確認中の仮置き表示 */
+.placement-preview-road {
+  pointer-events: none;
+  stroke-width: 14;
+  stroke-linecap: round;
+  opacity: .82;
+  filter:
+    drop-shadow(0 0 4px #ffffff)
+    drop-shadow(0 0 9px #ffffff);
+  animation:
+    placementPreviewPulse .72s
+    ease-in-out infinite alternate;
+}
+
+.placement-preview-vertex {
+  pointer-events: none;
+  stroke: #ffffff;
+  stroke-width: 5;
+  opacity: .78;
+  filter:
+    drop-shadow(0 0 5px #ffffff)
+    drop-shadow(0 0 10px #ffffff);
+  animation:
+    placementPreviewPulse .72s
+    ease-in-out infinite alternate;
+}
+
+.placement-preview-city {
+  stroke-width: 6;
+}
+
+.placement-preview-hex {
+  pointer-events: none;
+  fill: rgba(255,255,255,.16);
+  stroke: #ffffff;
+  stroke-width: 10;
+  stroke-linejoin: round;
+  filter:
+    drop-shadow(0 0 6px #ffffff)
+    drop-shadow(0 0 12px rgba(255,255,255,.9));
+  animation:
+    placementPreviewPulse .72s
+    ease-in-out infinite alternate;
+}
+
+.placement-preview-robber {
+  pointer-events: none;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  opacity: .82;
+  filter:
+    drop-shadow(0 0 5px #ffffff)
+    drop-shadow(0 0 11px #ffffff);
+  animation:
+    placementPreviewPulse .72s
+    ease-in-out infinite alternate;
+}
+
+@keyframes placementPreviewPulse {
+  from {
+    opacity: .52;
+  }
+
+  to {
+    opacity: 1;
+  }
+}

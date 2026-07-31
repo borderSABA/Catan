@@ -40,6 +40,7 @@ let awardDisplayTimer = null;
 let finalResultAutoTimer = null;
 let finalResultWinnerKey = null;
 let shownFishSwapKey = null;
+let pendingPlacementPreview = null;
 let boardRenderGeneration = 0;
 const preloadedTileImages = [];
 
@@ -511,6 +512,134 @@ function openConfirmModal(title,guide,onYes){
   });
 }
 
+function removeBoardSnapshot(){
+  svg?.parentElement
+    ?.querySelector(".board-snapshot")
+    ?.remove();
+}
+
+function clearPlacementPreview(){
+  pendingPlacementPreview=null;
+  removeBoardSnapshot();
+}
+
+function requestPlacementConfirmation({
+  kind,
+  targetId,
+  itemName,
+  guide="",
+  onConfirm,
+}){
+  if(pendingPlacementPreview) return;
+
+  pendingPlacementPreview={
+    kind,
+    targetId,
+    playerId:currentPlayer()?.id??null,
+    playerColor:currentPlayer()?.color||"#ffffff",
+    itemName,
+  };
+
+  /*
+    仮置き表示をすぐ見せるため、
+    盤面更新時の一時スナップショットは使わない。
+  */
+  removeBoardSnapshot();
+  render();
+
+  openChoiceModal({
+    title:"ここに置いていいですか？",
+    guide:
+      guide||
+      `${itemName}を選択した場所に置きます。`,
+    allowCancel:false,
+    options:[
+      {
+        value:true,
+        label:"はい",
+        icon:"✓",
+        className:"yes",
+        sub:"この場所で確定する",
+      },
+      {
+        value:false,
+        label:"いいえ",
+        icon:"×",
+        className:"no",
+        sub:"場所を選び直す",
+      },
+    ],
+    onSelect:confirmed=>{
+      clearPlacementPreview();
+
+      if(
+        confirmed &&
+        typeof onConfirm==="function"
+      ){
+        onConfirm();
+      }else{
+        render();
+      }
+    },
+  });
+}
+
+function placementPreviewMatches(kind,targetId){
+  return (
+    pendingPlacementPreview?.kind===kind &&
+    String(pendingPlacementPreview.targetId)===String(targetId)
+  );
+}
+
+function confirmStealTarget(
+  targetId,
+  onConfirm,
+  onReject=null
+){
+  const target=playerById(targetId);
+
+  if(!target){
+    if(typeof onReject==="function"){
+      onReject();
+    }
+    return;
+  }
+
+  openChoiceModal({
+    title:"この人から奪っていいですか？",
+    guide:
+      `${target.name}から資源を`+
+      "ランダムに1枚奪います。",
+    allowCancel:false,
+    options:[
+      {
+        value:true,
+        label:"はい",
+        icon:"✓",
+        className:"yes",
+        sub:`${target.name}から奪う`,
+      },
+      {
+        value:false,
+        label:"いいえ",
+        icon:"×",
+        className:"no",
+        sub:"相手を選び直す",
+      },
+    ],
+    onSelect:confirmed=>{
+      if(
+        confirmed &&
+        typeof onConfirm==="function"
+      ){
+        onConfirm(target.id);
+      }else if(typeof onReject==="function"){
+        onReject();
+      }
+    },
+  });
+}
+
 function playerChoiceOptions(players,subBuilder=null){
   return players.map(player=>({
     value:player.id,
@@ -833,6 +962,7 @@ function newGame(){
   shownAwardEventIds.clear();
   shownResourcePopEventIds.clear();
   shownTurnAnnouncementEventIds.clear();
+  pendingPlacementPreview=null;
   clearTimeout(turnAnnouncementTimer);
   turnAnnouncementTimer=null;
   $("turnAnnouncement")?.classList.add("hidden");
@@ -1290,21 +1420,108 @@ function buyDev(playerId){
 }
 function setupClickVertex(vertexId){
   const p=currentPlayer();
-  if(game.phase!=="setupSettlement" || !isLocalPlayer(p)) return;
-  if(!canPlaceSettlement(p.id,vertexId,true)){ log("そこには開拓地を置けません。"); return; }
-  placeSettlement(p.id,vertexId,true);
-  game.setupVertex=vertexId;
-  game.phase="setupRoad";
-  log(`${p.name}が初期開拓地を置きました。隣接する辺に街道を置いてください。`);
-  render();
+
+  if(
+    game.phase!=="setupSettlement" ||
+    !isLocalPlayer(p)
+  ){
+    return;
+  }
+
+  if(!canPlaceSettlement(p.id,vertexId,true)){
+    log("そこには開拓地を置けません。");
+    return;
+  }
+
+  requestPlacementConfirmation({
+    kind:"settlement",
+    targetId:vertexId,
+    itemName:"開拓地",
+    guide:"初期開拓地をこの交差点に置きます。",
+    onConfirm:()=>{
+      const player=currentPlayer();
+
+      if(
+        game.phase!=="setupSettlement" ||
+        !isLocalPlayer(player) ||
+        !canPlaceSettlement(
+          player.id,
+          vertexId,
+          true
+        )
+      ){
+        log("その場所には置けなくなりました。");
+        render();
+        return;
+      }
+
+      placeSettlement(
+        player.id,
+        vertexId,
+        true
+      );
+      game.setupVertex=vertexId;
+      game.phase="setupRoad";
+
+      log(
+        `${player.name}が初期開拓地を置きました。`+
+        "隣接する辺に街道を置いてください。"
+      );
+      render();
+    },
+  });
 }
 function setupClickEdge(edgeId){
   const p=currentPlayer();
-  if(game.phase!=="setupRoad" || !isLocalPlayer(p)) return;
-  if(!canPlaceRoad(p.id,edgeId,game.setupVertex)){ log("初期開拓地に接する辺を選んでください。"); return; }
-  game.board.edges[edgeId].road=p.id; p.roads.push(edgeId); p.pieces.road--;
-  log(`${p.name}が初期街道を置きました。`);
-  advanceSetup();
+
+  if(
+    game.phase!=="setupRoad" ||
+    !isLocalPlayer(p)
+  ){
+    return;
+  }
+
+  if(
+    !canPlaceRoad(
+      p.id,
+      edgeId,
+      game.setupVertex
+    )
+  ){
+    log("初期開拓地に接する辺を選んでください。");
+    return;
+  }
+
+  requestPlacementConfirmation({
+    kind:"road",
+    targetId:edgeId,
+    itemName:"街道",
+    guide:"初期街道をこの辺に置きます。",
+    onConfirm:()=>{
+      const player=currentPlayer();
+
+      if(
+        game.phase!=="setupRoad" ||
+        !isLocalPlayer(player) ||
+        !canPlaceRoad(
+          player.id,
+          edgeId,
+          game.setupVertex
+        )
+      ){
+        log("その場所には置けなくなりました。");
+        render();
+        return;
+      }
+
+      game.board.edges[edgeId].road=player.id;
+      player.roads.push(edgeId);
+      player.pieces.road--;
+
+      log(`${player.name}が初期街道を置きました。`);
+      advanceSetup();
+    },
+  });
 }
 
 function advanceSetup(){
@@ -2012,23 +2229,75 @@ function moveRobberTo(hexId,playerId){
     if(b && b.player!==playerId && totalResources(playerById(b.player))>0) victims.add(b.player);
   }
   const candidates=[...victims].map(playerById);
-  if(candidates.length && isLocalPlayer(playerById(playerId))){
+
+  if(
+    candidates.length &&
+    isLocalPlayer(playerById(playerId))
+  ){
     game.phase="chooseVictim";
     render();
-    openChoiceModal({
-      title:"資源を奪う相手",
-      guide:"この土地に隣接するプレイヤーから、資源をランダムに1枚奪います。",
-      options:playerChoiceOptions(
-        candidates,
-        player=>`資源カード ${totalResources(player)}枚`
-      ),
-      allowCancel:false,
-      onSelect:victimId=>finishRobberMove(playerId,victimId),
-    });
+
+    const openVictimSelection=()=>{
+      if(
+        game.phase!=="chooseVictim" ||
+        game.robberMover!==playerId
+      ){
+        return;
+      }
+
+      const currentCandidates=
+        chooseVictim(playerId)||
+        [];
+
+      if(!currentCandidates.length){
+        finishRobberMove(playerId,null);
+        return;
+      }
+
+      openChoiceModal({
+        title:"資源を奪う相手",
+        guide:
+          "この土地に隣接するプレイヤーから、"+
+          "資源をランダムに1枚奪います。",
+        options:playerChoiceOptions(
+          currentCandidates,
+          player=>
+            `資源カード `+
+            `${totalResources(player)}枚`
+        ),
+        allowCancel:false,
+        onSelect:victimId=>{
+          confirmStealTarget(
+            victimId,
+            confirmedVictimId=>{
+              if(
+                game.phase!=="chooseVictim" ||
+                game.robberMover!==playerId
+              ){
+                return;
+              }
+
+              finishRobberMove(
+                playerId,
+                confirmedVictimId
+              );
+            },
+            openVictimSelection
+          );
+        },
+      });
+    };
+
+    openVictimSelection();
   }else{
-    const victimId=candidates.length?candidates[rand(candidates.length)].id:null;
+    const victimId=
+      candidates.length
+        ?candidates[rand(candidates.length)].id
+        :null;
+
     finishRobberMove(playerId,victimId);
   }
+
   return true;
 }
 
@@ -2123,37 +2392,180 @@ function setBuildMode(mode){
 
 function normalClickVertex(vertexId){
   const p=currentPlayer();
-  if(!isLocalPlayer(p) || game.phase!=="turn" || !game.rolled) return;
-  if(game.buildMode==="settlement"){
-    if(!canPlaceSettlement(p.id,vertexId,false)){ log("そこには開拓地を建てられません。"); return; }
-    payCost(p,COST.settlement,"開拓地建設"); placeSettlement(p.id,vertexId,false);
-    p.builtThisTurn=true;
-    log("あなたが開拓地を建てました。"); game.buildMode=null;
-  } else if(game.buildMode==="city"){
-    if(!canUpgradeCity(p.id,vertexId)){ log("自分の開拓地を選んでください。"); return; }
-    placeCity(p.id,vertexId);
-    p.builtThisTurn=true;
-    log("あなたが都市を建てました。"); game.buildMode=null;
+
+  if(
+    !isLocalPlayer(p) ||
+    game.phase!=="turn" ||
+    !game.rolled
+  ){
+    return;
   }
-  updateAwards(); checkVictory(); render();
+
+  if(game.buildMode==="settlement"){
+    if(!canPlaceSettlement(p.id,vertexId,false)){
+      log("そこには開拓地を建てられません。");
+      return;
+    }
+
+    requestPlacementConfirmation({
+      kind:"settlement",
+      targetId:vertexId,
+      itemName:"開拓地",
+      guide:"開拓地をこの交差点に建てます。",
+      onConfirm:()=>{
+        const player=currentPlayer();
+
+        if(
+          !isLocalPlayer(player) ||
+          game.phase!=="turn" ||
+          game.buildMode!=="settlement" ||
+          !canPlaceSettlement(
+            player.id,
+            vertexId,
+            false
+          )
+        ){
+          log("その場所には建てられなくなりました。");
+          render();
+          return;
+        }
+
+        payCost(
+          player,
+          COST.settlement,
+          "開拓地建設"
+        );
+        placeSettlement(
+          player.id,
+          vertexId,
+          false
+        );
+
+        player.builtThisTurn=true;
+        game.buildMode=null;
+
+        log("あなたが開拓地を建てました。");
+        updateAwards();
+        checkVictory();
+        render();
+      },
+    });
+    return;
+  }
+
+  if(game.buildMode==="city"){
+    if(!canUpgradeCity(p.id,vertexId)){
+      log("自分の開拓地を選んでください。");
+      return;
+    }
+
+    requestPlacementConfirmation({
+      kind:"city",
+      targetId:vertexId,
+      itemName:"都市",
+      guide:"この開拓地を都市へ発展させます。",
+      onConfirm:()=>{
+        const player=currentPlayer();
+
+        if(
+          !isLocalPlayer(player) ||
+          game.phase!=="turn" ||
+          game.buildMode!=="city" ||
+          !canUpgradeCity(
+            player.id,
+            vertexId
+          )
+        ){
+          log("その場所には建てられなくなりました。");
+          render();
+          return;
+        }
+
+        placeCity(player.id,vertexId);
+        player.builtThisTurn=true;
+        game.buildMode=null;
+
+        log("あなたが都市を建てました。");
+        updateAwards();
+        checkVictory();
+        render();
+      },
+    });
+  }
 }
 function normalClickEdge(edgeId){
   const p=currentPlayer();
-  if(!isLocalPlayer(p) || game.phase!=="turn") return;
-  const free=game.freeRoads>0;
-  if(game.buildMode!=="road" && !free) return;
-  if(!canPlaceRoad(p.id,edgeId)){ log("そこには街道を建てられません。"); return; }
-  if(!free && !game.rolled) return;
-  placeRoad(p.id,edgeId,free);
-  log(`あなたが街道を建てました${free?"（無料）":""}。`);
-  if(free){
-    game.freeRoads--;
-    if(game.freeRoads===0) game.buildMode=null;
-  } else {
-    p.builtThisTurn=true;
-    game.buildMode=null;
+
+  if(
+    !isLocalPlayer(p) ||
+    game.phase!=="turn"
+  ){
+    return;
   }
-  checkVictory(); render();
+
+  const free=game.freeRoads>0;
+
+  if(game.buildMode!=="road" && !free) return;
+
+  if(!canPlaceRoad(p.id,edgeId)){
+    log("そこには街道を建てられません。");
+    return;
+  }
+
+  if(!free && !game.rolled) return;
+
+  requestPlacementConfirmation({
+    kind:"road",
+    targetId:edgeId,
+    itemName:"街道",
+    guide:
+      free
+        ?"無料の街道をこの辺に置きます。"
+        :"街道をこの辺に建てます。",
+    onConfirm:()=>{
+      const player=currentPlayer();
+      const stillFree=game.freeRoads>0;
+
+      if(
+        !isLocalPlayer(player) ||
+        game.phase!=="turn" ||
+        (
+          game.buildMode!=="road" &&
+          !stillFree
+        ) ||
+        !canPlaceRoad(player.id,edgeId)
+      ){
+        log("その場所には建てられなくなりました。");
+        render();
+        return;
+      }
+
+      placeRoad(
+        player.id,
+        edgeId,
+        stillFree
+      );
+
+      log(
+        `あなたが街道を建てました`+
+        `${stillFree?"（無料）":""}。`
+      );
+
+      if(stillFree){
+        game.freeRoads--;
+
+        if(game.freeRoads===0){
+          game.buildMode=null;
+        }
+      }else{
+        player.builtThisTurn=true;
+        game.buildMode=null;
+      }
+
+      checkVictory();
+      render();
+    },
+  });
 }
 
 function getTradeRate(player,resource){
@@ -2599,21 +3011,60 @@ function performFishAction(action){
     return;
   }
   if(action==="steal"){
-    const candidates=chooseVictim(p.id);
-    if(!candidates?.length){
-      log("資源を持つ相手がいません。");
-      return;
-    }
-    openChoiceModal({
-      title:"魚3匹：資源を奪う",
-      guide:"資源をランダムに1枚奪う相手を選択してください。",
-      options:playerChoiceOptions(
-        candidates,
-        player=>`資源カード ${totalResources(player)}枚`
-      ),
-      onSelect:targetId=>confirmFishAction(action,targetId),
-      allowCancel:true,
-    });
+    const openFishVictimSelection=()=>{
+      const currentPlayerNow=currentPlayer();
+
+      if(
+        !currentPlayerNow ||
+        !isLocalPlayer(currentPlayerNow) ||
+        game.phase!=="turn"
+      ){
+        return;
+      }
+
+      const candidates=
+        chooseVictim(currentPlayerNow.id);
+
+      if(!candidates?.length){
+        log("資源を持つ相手がいません。");
+        return;
+      }
+
+      openChoiceModal({
+        title:"魚3匹：資源を奪う",
+        guide:
+          "資源をランダムに1枚奪う"+
+          "相手を選択してください。",
+        options:playerChoiceOptions(
+          candidates,
+          player=>
+            `資源カード `+
+            `${totalResources(player)}枚`
+        ),
+        onSelect:targetId=>{
+          confirmStealTarget(
+            targetId,
+            confirmedTargetId=>{
+              if(
+                game.phase!=="turn" ||
+                !isLocalTurn()
+              ){
+                return;
+              }
+
+              confirmFishAction(
+                action,
+                confirmedTargetId
+              );
+            },
+            openFishVictimSelection
+          );
+        },
+        allowCancel:true,
+      });
+    };
+
+    openFishVictimSelection();
     return;
   }
   if(action==="resource"){
@@ -3285,12 +3736,32 @@ function bindRobberHexTarget(element,hexId){
     event.preventDefault();
     event.stopPropagation();
 
-    if(hexId!==game.robberHex){
-      moveRobberTo(
-        hexId,
-        currentPlayer().id
-      );
-    }
+    if(hexId===game.robberHex) return;
+
+    requestPlacementConfirmation({
+      kind:"robber",
+      targetId:hexId,
+      itemName:"盗賊",
+      guide:"盗賊をこのタイルへ移動します。",
+      onConfirm:()=>{
+        const player=currentPlayer();
+
+        if(
+          game.phase!=="moveRobber" ||
+          !isLocalPlayer(player) ||
+          hexId===game.robberHex
+        ){
+          log("そのタイルには移動できなくなりました。");
+          render();
+          return;
+        }
+
+        moveRobberTo(
+          hexId,
+          player.id
+        );
+      },
+    });
   });
 }
 
@@ -3463,6 +3934,24 @@ function renderBoard(){
       cat.textContent="🐱";
       svg.appendChild(cat);
     }
+
+    if(placementPreviewMatches("robber",h.id)){
+      svg.appendChild(
+        createSvg("polygon",{
+          points:pts,
+          class:"placement-preview-hex",
+        })
+      );
+
+      const previewRobber=createSvg("text",{
+        x:h.x,
+        y:h.y+7,
+        class:"placement-preview-robber",
+        style:`font-size:${game.board.large?34:42}px`,
+      });
+      previewRobber.textContent="🐱";
+      svg.appendChild(previewRobber);
+    }
   }
 
   // 港はタイルより後に描画し、白いタイル境界で線が隠れないようにする
@@ -3531,6 +4020,23 @@ function renderBoard(){
     if(e.road!==null){
       svg.appendChild(createSvg("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"road",stroke:playerById(e.road).color}));
     }
+
+    if(placementPreviewMatches("road",e.id)){
+      svg.appendChild(
+        createSvg("line",{
+          x1:a.x,
+          y1:a.y,
+          x2:b.x,
+          y2:b.y,
+          class:"placement-preview-road",
+          stroke:
+            pendingPlacementPreview?.playerColor||
+            currentPlayer()?.color||
+            "#ffffff",
+        })
+      );
+    }
+
     const click=createSvg("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"edge-click"});
     click.addEventListener("click",()=>{
       if(game.phase==="setupRoad") setupClickEdge(e.id);
@@ -3552,6 +4058,33 @@ function renderBoard(){
         svg.appendChild(createSvg("polygon",{points:pts,class:"city",fill:p.color}));
       }
     }
+    if(
+      placementPreviewMatches("settlement",v.id) ||
+      placementPreviewMatches("city",v.id)
+    ){
+      const previewKind=
+        pendingPlacementPreview?.kind||
+        "settlement";
+
+      const previewMarker=createSvg("circle",{
+        cx:v.x,
+        cy:v.y,
+        r:
+          previewKind==="city"
+            ?(game.board.large?19:23)
+            :(game.board.large?15:18),
+        class:
+          `placement-preview-vertex `+
+          `placement-preview-${previewKind}`,
+        fill:
+          pendingPlacementPreview?.playerColor||
+          currentPlayer()?.color||
+          "#ffffff",
+      });
+
+      svg.appendChild(previewMarker);
+    }
+
     const hit=createSvg("circle",{cx:v.x,cy:v.y,r:game.board.large?11:14,class:"vertex-click"});
     hit.addEventListener("click",()=>{
       if(game.phase==="setupSettlement") setupClickVertex(v.id);

@@ -32,7 +32,9 @@ let shownPendingTradeId = null;
 const locallyResolvedTradeIds = new Set();
 const shownAwardEventIds = new Set();
 const shownResourcePopEventIds = new Set();
+const shownTurnAnnouncementEventIds = new Set();
 const awardDisplayQueue = [];
+let turnAnnouncementTimer = null;
 let awardDisplayActive = false;
 let awardDisplayTimer = null;
 let finalResultAutoTimer = null;
@@ -541,6 +543,101 @@ function openResourceChoice(title,guide,onSelect,{amountLabel="銀行在庫",fil
   openChoiceModal({title,guide,options,onSelect,allowCancel:true});
 }
 
+function hideTurnAnnouncement(){
+  clearTimeout(turnAnnouncementTimer);
+  turnAnnouncementTimer=null;
+  $("turnAnnouncement")?.classList.add("hidden");
+}
+
+function renderTurnAnnouncementEvent(event){
+  if(!event) return;
+
+  const overlay=$("turnAnnouncement");
+  const card=$("turnAnnouncementCard");
+  const text=$("turnAnnouncementText");
+
+  if(!overlay || !card || !text) return;
+
+  clearTimeout(turnAnnouncementTimer);
+
+  const playerName=
+    event.playerName||
+    playerById(event.playerId)?.name||
+    "プレイヤー";
+
+  text.textContent=`${playerName}のターン`;
+  card.style.setProperty(
+    "--turn-player-color",
+    event.playerColor||"#ffffff"
+  );
+
+  overlay.classList.remove("hidden");
+
+  card.style.animation="none";
+  void card.offsetWidth;
+  card.style.animation="";
+
+  turnAnnouncementTimer=setTimeout(
+    hideTurnAnnouncement,
+    2000
+  );
+}
+
+function collectTurnAnnouncementEvents(){
+  if(
+    !game ||
+    !Array.isArray(game.turnAnnouncementEvents)
+  ){
+    return;
+  }
+
+  for(const event of game.turnAnnouncementEvents){
+    if(
+      !event?.id ||
+      shownTurnAnnouncementEventIds.has(event.id)
+    ){
+      continue;
+    }
+
+    shownTurnAnnouncementEventIds.add(event.id);
+    renderTurnAnnouncementEvent(event);
+  }
+}
+
+function queueTurnAnnouncement(playerId){
+  if(!game) return;
+
+  const player=playerById(playerId);
+  if(!player) return;
+
+  if(!Array.isArray(game.turnAnnouncementEvents)){
+    game.turnAnnouncementEvents=[];
+  }
+
+  const eventId=
+    `turn-${game.turnSerial}-${playerId}`;
+
+  if(
+    game.turnAnnouncementEvents.some(
+      event=>event?.id===eventId
+    )
+  ){
+    return;
+  }
+
+  game.turnAnnouncementEvents.push({
+    id:eventId,
+    turnSerial:game.turnSerial,
+    playerId,
+    playerName:player.name,
+    playerColor:player.color,
+    createdAt:Date.now(),
+  });
+
+  game.turnAnnouncementEvents=
+    game.turnAnnouncementEvents.slice(-32);
+}
+
 function normalizedResourceDelta(delta){
   if(!delta || typeof delta!=="object") return {};
 
@@ -735,6 +832,10 @@ function newGame(){
   cpuScheduledKey=null;
   shownAwardEventIds.clear();
   shownResourcePopEventIds.clear();
+  shownTurnAnnouncementEventIds.clear();
+  clearTimeout(turnAnnouncementTimer);
+  turnAnnouncementTimer=null;
+  $("turnAnnouncement")?.classList.add("hidden");
   awardDisplayQueue.length=0;
   awardDisplayActive=false;
   clearTimeout(awardDisplayTimer);
@@ -789,6 +890,7 @@ function newGame(){
     resolvedTradeIds:[],
     awardEvents:[],
     resourcePopEvents:[],
+    turnAnnouncementEvents:[],
     discardQueue:[],
     discardPlayerId:null,
     pendingFishDraws:[],
@@ -1217,6 +1319,7 @@ function advanceSetup(){
     cpuTimer=null;
     cpuScheduledKey=null;
     log("初期配置が完了しました。ゲームを開始します。");
+    queueTurnAnnouncement(game.current);
     render();
     scheduleCpuIfNeeded();
     return;
@@ -2739,6 +2842,7 @@ function finishActivePhase(){
   game.dice=[0,0];
   game.turnDice=[0,0];
   game.phase="turn";
+  queueTurnAnnouncement(game.current);
   render();
   scheduleCpuIfNeeded();
 }
@@ -3160,6 +3264,7 @@ function render(){
   renderSide();
   renderLog();
   collectResourcePopEvents();
+  collectTurnAnnouncementEvents();
   collectAwardAnnouncements();
   scheduleFinalResultIfNeeded();
   onlineAfterRender();

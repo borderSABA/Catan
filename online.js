@@ -113,7 +113,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.33");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.34");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -269,7 +269,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.33";
+const APP_VERSION="v1.34";
 
 function isSmartphoneGameViewport(){
   return window.matchMedia(
@@ -377,6 +377,7 @@ function receiveRoomState(state){
     if(!Array.isArray(game.resolvedTradeIds)) game.resolvedTradeIds=[];
     if(!Array.isArray(game.awardEvents)) game.awardEvents=[];
     if(!Array.isArray(game.resourcePopEvents)) game.resourcePopEvents=[];
+    if(!Array.isArray(game.turnAnnouncementEvents)) game.turnAnnouncementEvents=[];
     if(!Array.isArray(game.diceHistory)) game.diceHistory=[];
     if(!Array.isArray(game.turnDice)){
       game.turnDice=game.rolled && Array.isArray(game.dice)
@@ -392,6 +393,12 @@ function receiveRoomState(state){
 
       game.resourcePopEvents.forEach(event=>{
         if(event?.id) shownResourcePopEventIds.add(event.id);
+      });
+
+      game.turnAnnouncementEvents.forEach(event=>{
+        if(event?.id){
+          shownTurnAnnouncementEventIds.add(event.id);
+        }
       });
     }
 

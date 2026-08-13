@@ -72,10 +72,25 @@ function onlineSend(payload){
   onlineSocket.send(JSON.stringify(payload));
   return true;
 }
+
+function onlineSendBoardPing(ping){
+  if(!ONLINE_MODE || !ping) return false;
+
+  return onlineSend({
+    type:"board_ping",
+    ping:{
+      id:ping.id,
+      x:Number(ping.x),
+      y:Number(ping.y),
+    },
+  });
+}
+
 function cloneGameForNetwork(){
   return JSON.parse(JSON.stringify(game,(key,value)=>{
     if(typeof value==="function") return undefined;
     if(key==="pendingAfterRobber") return null;
+    if(key==="pingEvents") return undefined;
     return value;
   }));
 }
@@ -113,7 +128,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.41");
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.42");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -252,6 +267,13 @@ function joinOnlineRoom(roomId){
       showOnlineMessage(message.message||"接続エラー",true);
       return;
     }
+    if(message.type==="board_ping"){
+      if(typeof receiveBoardPing==="function"){
+        receiveBoardPing(message.ping);
+      }
+      return;
+    }
+
     if(message.type==="room_state"){
       receiveRoomState(message.state);
     }
@@ -269,7 +291,7 @@ function joinOnlineRoom(roomId){
   });
 }
 
-const APP_VERSION="v1.41";
+const APP_VERSION="v1.42";
 
 function isSmartphoneGameViewport(){
   return window.matchMedia(
@@ -386,7 +408,6 @@ function receiveRoomState(state){
     if(!Array.isArray(game.awardEvents)) game.awardEvents=[];
     if(!Array.isArray(game.resourcePopEvents)) game.resourcePopEvents=[];
     if(!Array.isArray(game.turnAnnouncementEvents)) game.turnAnnouncementEvents=[];
-    if(!Array.isArray(game.pingEvents)) game.pingEvents=[];
     if(!Array.isArray(game.diceHistory)) game.diceHistory=[];
     if(!Array.isArray(game.turnDice)){
       game.turnDice=game.rolled && Array.isArray(game.dice)

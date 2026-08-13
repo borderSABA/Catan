@@ -42,6 +42,7 @@ let finalResultWinnerKey = null;
 let shownFishSwapKey = null;
 let pendingPlacementPreview = null;
 let boardPingMode = false;
+let boardPingEvents = [];
 
 const DESKTOP_1080_FIT_STORAGE_KEY=
   "catan-desktop-1080-fit";
@@ -985,6 +986,7 @@ function newGame(){
   shownTurnAnnouncementEventIds.clear();
   pendingPlacementPreview=null;
   boardPingMode=false;
+  boardPingEvents=[];
   clearTimeout(turnAnnouncementTimer);
   turnAnnouncementTimer=null;
   $("turnAnnouncement")?.classList.add("hidden");
@@ -1043,7 +1045,6 @@ function newGame(){
     awardEvents:[],
     resourcePopEvents:[],
     turnAnnouncementEvents:[],
-    pingEvents:[],
     discardQueue:[],
     discardPlayerId:null,
     pendingFishDraws:[],
@@ -4042,21 +4043,70 @@ function toggleBoardPingMode(){
   }
 }
 
+function normalizedBoardPing(event){
+  if(!event || typeof event!=="object") return null;
+
+  const x=Number(event.x);
+  const y=Number(event.y);
+
+  if(!Number.isFinite(x) || !Number.isFinite(y)){
+    return null;
+  }
+
+  return {
+    id:
+      String(
+        event.id||
+        `ping-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      ).slice(0,120),
+    playerId:
+      Number.isInteger(Number(event.playerId))
+        ?Number(event.playerId)
+        :null,
+    playerName:
+      String(event.playerName||"プレイヤー").slice(0,30),
+    playerColor:
+      String(event.playerColor||"#ffffff").slice(0,32),
+    x,
+    y,
+    createdAt:
+      Number(event.createdAt)||Date.now(),
+  };
+}
+
+function acceptBoardPing(event,{renderNow=true}={}){
+  const ping=normalizedBoardPing(event);
+  if(!ping) return null;
+
+  const existing=boardPingEvents.find(
+    item=>item.id===ping.id
+  );
+
+  if(existing){
+    return existing;
+  }
+
+  boardPingEvents.push(ping);
+  boardPingEvents=boardPingEvents.slice(-32);
+
+  if(renderNow && game){
+    renderBoardPings();
+  }
+
+  return ping;
+}
+
 function queueBoardPing(x,y){
-  if(!game) return;
+  if(!game) return null;
 
   const player=
     typeof localPlayer==="function"
       ?localPlayer()
       :game.players?.[0];
 
-  if(!player) return;
+  if(!player) return null;
 
-  if(!Array.isArray(game.pingEvents)){
-    game.pingEvents=[];
-  }
-
-  game.pingEvents.push({
+  const ping=acceptBoardPing({
     id:
       `ping-${player.id}-${Date.now()}-`+
       `${Math.random().toString(36).slice(2)}`,
@@ -4068,29 +4118,52 @@ function queueBoardPing(x,y){
     createdAt:Date.now(),
   });
 
-  game.pingEvents=game.pingEvents.slice(-32);
+  if(
+    ping &&
+    typeof onlineSendBoardPing==="function"
+  ){
+    onlineSendBoardPing(ping);
+  }
+
+  return ping;
+}
+
+function receiveBoardPing(event){
+  if(!game) return;
+  acceptBoardPing(event,{renderNow:true});
 }
 
 function activeBoardPings(){
   const now=Date.now();
 
-  return (game?.pingEvents||[]).filter(event=>{
+  boardPingEvents=boardPingEvents.filter(event=>{
     const age=now-Number(event?.createdAt||0);
 
     return (
       event &&
       Number.isFinite(Number(event.x)) &&
       Number.isFinite(Number(event.y)) &&
-      age>=-1000 &&
+      age>=-1500 &&
       age<BOARD_PING_DURATION_MS
     );
   });
+
+  return boardPingEvents;
+}
+
+function boardPingAlreadyRendered(id){
+  return [...svg.querySelectorAll(".board-ping")]
+    .some(element=>element.dataset.pingId===id);
 }
 
 function renderBoardPings(){
   const events=activeBoardPings();
 
   for(const event of events){
+    if(boardPingAlreadyRendered(event.id)){
+      continue;
+    }
+
     const group=createSvg("g",{
       class:"board-ping",
       "data-ping-id":event.id||"",
@@ -4168,7 +4241,7 @@ function handleBoardPingPointer(event){
 
   boardPingMode=false;
   updatePingButtons();
-  render();
+  renderBoardPings();
 
   return true;
 }

@@ -1,7 +1,7 @@
 タイル画像の入れ方
 
-このフォルダへ次の6ファイルを置いてください。
-wood.webp / brick.webp / wool.webp / grain.webp / ore.webp / desert.webp
+このフォルダへ次の7ファイルを置けます。
+wood.webp / brick.webp / wool.webp / grain.webp / ore.webp / desert.webp / lake.webp
 PNGを使う場合は、同じ名前で拡張子を .png にしてください。WebPが先に読み込まれ、無ければPNGを読み込みます。
 
 推奨仕様
@@ -13,3 +13,7 @@ PNGを使う場合は、同じ名前で拡張子を .png にしてください�
 ・1枚100～300KB程度にすると読み込みが軽い
 
 画像を置かない資源は、これまで通り単色タイルで表示されます。
+
+漁師拡張の湖：lake.webp または lake.png
+
+湖は lake.webp または lake.png で画像化できます。

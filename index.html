@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.37（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.37">
+  <title>カタン オンライン v1.41（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.41">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.37</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.41</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -66,12 +66,21 @@
     </div>
   </section>
 
+  <div id="desktopFitStage" class="desktop-fit-stage">
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.37</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.41</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
+      <button id="desktopPingBtn" class="secondary desktop-ping-button">📍ピン</button>
+      <button id="desktopLogBtn" class="secondary desktop-log-button">ログ</button>
+      <button
+        id="desktop1080FitBtn"
+        class="secondary desktop-1080-fit-button"
+        type="button"
+        title="ゲーム画面を仮想1920×1080で表示領域に合わせる"
+      >1920×1080</button>
       <button id="desktopResultBtn" class="secondary desktop-result-button">途中経過を見る</button>
       <span id="currentRoomLabel">未接続</span>
       <span id="onlineSocketState" class="socket-state">接続確認中</span>
@@ -96,6 +105,14 @@
   <main id="gameMain" class="hidden" hidden>
     <section class="board-wrap">
       <svg id="board" viewBox="0 0 900 760" aria-label="カタン盤面"></svg>
+
+      <button
+        id="mobilePingBtn"
+        type="button"
+        class="mobile-board-ping-button"
+        aria-pressed="false"
+      >📍ピン</button>
+
       <div id="resourcePopLayer" class="resource-pop-layer" aria-live="polite"></div>
 
       <div
@@ -202,6 +219,28 @@
       </section>
     </aside>
   </main>
+  </div>
+
+  <div
+    id="desktopLogModal"
+    class="desktop-log-modal hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="desktopLogTitle"
+  >
+    <div class="desktop-log-dialog">
+      <div class="desktop-log-header">
+        <h2 id="desktopLogTitle">ゲームログ</h2>
+        <button
+          id="desktopLogCloseBtn"
+          type="button"
+          class="desktop-log-close"
+          aria-label="ログを閉じる"
+        >×</button>
+      </div>
+      <div id="desktopLogContent" class="desktop-log-content"></div>
+    </div>
+  </div>
 
   <div id="discardModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="discardTitle">
     <div class="discard-dialog">
@@ -285,8 +324,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.37"></script>
-  <script src="online.js?version=v1.37"></script>
-  <script src="game.js?version=v1.37"></script>
+  <script src="config.js?version=v1.41"></script>
+  <script src="online.js?version=v1.41"></script>
+  <script src="game.js?version=v1.41"></script>
 </body>
 </html>

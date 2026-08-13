@@ -41,6 +41,16 @@ let finalResultAutoTimer = null;
 let finalResultWinnerKey = null;
 let shownFishSwapKey = null;
 let pendingPlacementPreview = null;
+let boardPingMode = false;
+
+const DESKTOP_1080_FIT_STORAGE_KEY=
+  "catan-desktop-1080-fit";
+
+let desktop1080FitEnabled=
+  localStorage.getItem(
+    DESKTOP_1080_FIT_STORAGE_KEY
+  )==="1";
+
 let boardRenderGeneration = 0;
 const preloadedTileImages = [];
 
@@ -442,10 +452,21 @@ function log(msg){
 }
 
 function renderLog(){
-  const box=$("log");
-  if(!box) return;
   const lines=game?.logHistory||[];
-  box.innerHTML=lines.map(msg=>`<div class="log-line">${escapeHtml(msg)}</div>`).join("");
+  const html=lines
+    .map(
+      msg=>
+        `<div class="log-line">`+
+        `${escapeHtml(msg)}`+
+        `</div>`
+    )
+    .join("");
+
+  const box=$("log");
+  if(box) box.innerHTML=html;
+
+  const desktopBox=$("desktopLogContent");
+  if(desktopBox) desktopBox.innerHTML=html;
 }
 
 function escapeHtml(value){
@@ -963,6 +984,7 @@ function newGame(){
   shownResourcePopEventIds.clear();
   shownTurnAnnouncementEventIds.clear();
   pendingPlacementPreview=null;
+  boardPingMode=false;
   clearTimeout(turnAnnouncementTimer);
   turnAnnouncementTimer=null;
   $("turnAnnouncement")?.classList.add("hidden");
@@ -1021,6 +1043,7 @@ function newGame(){
     awardEvents:[],
     resourcePopEvents:[],
     turnAnnouncementEvents:[],
+    pingEvents:[],
     discardQueue:[],
     discardPlayerId:null,
     pendingFishDraws:[],
@@ -2194,8 +2217,79 @@ function beginRobberMove(){
   }
 }
 
+function robberVictimCandidates(hexId,playerId){
+  const hex=game?.board?.hexes?.[hexId];
+  if(!hex) return [];
+
+  const victimIds=new Set();
+
+  for(const vertexId of hex.corners){
+    const building=
+      game.board.vertices?.[vertexId]?.building;
+
+    if(
+      !building ||
+      building.player===playerId
+    ){
+      continue;
+    }
+
+    const victim=playerById(building.player);
+
+    if(
+      victim &&
+      totalResources(victim)>0
+    ){
+      victimIds.add(victim.id);
+    }
+  }
+
+  return [...victimIds]
+    .map(playerById)
+    .filter(Boolean);
+}
+
+function canRobberStealFrom(
+  playerId,
+  victimId,
+  hexId=game?.robberHex
+){
+  if(
+    victimId===null ||
+    victimId===undefined ||
+    hexId===null ||
+    hexId===undefined
+  ){
+    return false;
+  }
+
+  return robberVictimCandidates(
+    hexId,
+    playerId
+  ).some(
+    player=>player.id===victimId
+  );
+}
+
 function finishRobberMove(playerId,victimId=null){
-  if(victimId!==null) stealRandom(playerId,victimId);
+  if(victimId!==null){
+    if(
+      canRobberStealFrom(
+        playerId,
+        victimId,
+        game.robberHex
+      )
+    ){
+      stealRandom(playerId,victimId);
+    }else{
+      log(
+        "盗賊に隣接していないプレイヤーからは"+
+        "資源を奪えません。"
+      );
+      victimId=null;
+    }
+  }
+
   game.phase="turn";
   const continuation=game.pendingAfterRobber;
   const resumeCpuBuild=!!game.pendingCpuBuildAfterRobber;
@@ -2223,12 +2317,12 @@ function finishRobberMove(playerId,victimId=null){
 function moveRobberTo(hexId,playerId){
   if(hexId===game.robberHex) return false;
   game.robberHex=hexId;
-  const victims=new Set();
-  for(const vid of game.board.hexes[hexId].corners){
-    const b=game.board.vertices[vid].building;
-    if(b && b.player!==playerId && totalResources(playerById(b.player))>0) victims.add(b.player);
-  }
-  const candidates=[...victims].map(playerById);
+
+  const candidates=
+    robberVictimCandidates(
+      hexId,
+      playerId
+    );
 
   if(
     candidates.length &&
@@ -2246,8 +2340,10 @@ function moveRobberTo(hexId,playerId){
       }
 
       const currentCandidates=
-        chooseVictim(playerId)||
-        [];
+        robberVictimCandidates(
+          game.robberHex,
+          playerId
+        );
 
       if(!currentCandidates.length){
         finishRobberMove(playerId,null);
@@ -2274,6 +2370,21 @@ function moveRobberTo(hexId,playerId){
                 game.phase!=="chooseVictim" ||
                 game.robberMover!==playerId
               ){
+                return;
+              }
+
+              if(
+                !canRobberStealFrom(
+                  playerId,
+                  confirmedVictimId,
+                  game.robberHex
+                )
+              ){
+                log(
+                  "そのプレイヤーは盗賊のいるタイルに"+
+                  "隣接していません。"
+                );
+                openVictimSelection();
                 return;
               }
 
@@ -2973,26 +3084,193 @@ function executeFishAction(action,target,payment){
   render();
 }
 
+function fishActionConfirmationText(action,target,cost,payment){
+  let effectText="漁師の効果を使用します。";
+
+  if(action==="removeRobber"){
+    effectText="🐱を盤外へ追い出します。";
+  }else if(action==="steal"){
+    const victim=playerById(target);
+    effectText=
+      `${victim?.name||"選択した相手"}から`+
+      "資源をランダムに1枚奪います。";
+  }else if(action==="resource"){
+    effectText=
+      `${RESOURCE_JA[target]||"選択した資源"}を`+
+      "銀行から1枚受け取ります。";
+  }else if(action==="road"){
+    effectText=
+      "無料で街道を1本建設できる状態にします。";
+  }else if(action==="dev"){
+    effectText=
+      "発展カードを無料で1枚獲得します。";
+  }
+
+  const paymentText=
+    payment.total>cost
+      ?(
+        `魚チップ${payment.total}匹分を使います。`+
+        `必要数は${cost}匹なので、`+
+        `超過した${payment.total-cost}匹分は戻りません。`
+      )
+      :`魚チップ${cost}匹分を使います。`;
+
+  return `${effectText}\n${paymentText}`;
+}
+
+function fishActionStillValid(action,target){
+  const p=currentPlayer();
+
+  if(
+    !p ||
+    !isLocalPlayer(p) ||
+    game.phase!=="turn" ||
+    game.winner ||
+    game.freeRoads>0
+  ){
+    return false;
+  }
+
+  if(
+    action==="removeRobber" &&
+    game.robberHex===null
+  ){
+    return false;
+  }
+
+  if(action==="steal"){
+    const victim=playerById(target);
+
+    if(
+      !victim ||
+      victim.id===p.id ||
+      totalResources(victim)<=0
+    ){
+      return false;
+    }
+  }
+
+  if(
+    action==="resource" &&
+    (
+      !RESOURCES.includes(target) ||
+      game.bank[target]<=0
+    )
+  ){
+    return false;
+  }
+
+  if(
+    action==="road" &&
+    (
+      p.pieces.road<=0 ||
+      !Object.keys(game.board.edges).some(
+        edgeId=>canPlaceRoad(p.id,edgeId)
+      )
+    )
+  ){
+    return false;
+  }
+
+  if(
+    action==="dev" &&
+    !game.devDeck.length
+  ){
+    return false;
+  }
+
+  return true;
+}
+
 function confirmFishAction(action,target=null){
-  const p=currentPlayer(),cost=FISH_ACTION_COST[action];
+  const p=currentPlayer();
+  const cost=FISH_ACTION_COST[action];
   const payment=getHumanFishPayment(cost);
+
   if(!payment){
     if(game.selectedFishIndices.length){
-      log(`選択中の魚は${selectedFishTotal()}匹分です。${cost}匹分以上を選んでください。`);
+      log(
+        `選択中の魚は${selectedFishTotal()}匹分です。`+
+        `${cost}匹分以上を選んでください。`
+      );
     }else{
-      log(`${cost}匹分を支払える魚チップの組み合わせがありません。`);
+      log(
+        `${cost}匹分を支払える魚チップの`+
+        "組み合わせがありません。"
+      );
     }
     return;
   }
-  if(payment.total>cost){
-    openConfirmModal(
-      "魚の支払い確認",
-      `${payment.total}匹分を使います。超過した${payment.total-cost}匹分は戻りません。`,
-      ()=>executeFishAction(action,target,payment)
-    );
-  }else{
-    executeFishAction(action,target,payment);
-  }
+
+  const actionNames={
+    removeRobber:"魚2匹：盗賊を追い払う",
+    steal:"魚3匹：資源を奪う",
+    resource:"魚4匹：好きな資源",
+    road:"魚5匹：無料街道",
+    dev:"魚7匹：無料発展",
+  };
+
+  openChoiceModal({
+    title:"この漁師効果を発動していいですか？",
+    guide:
+      `${actionNames[action]||"漁師効果"}\n`+
+      fishActionConfirmationText(
+        action,
+        target,
+        cost,
+        payment
+      ),
+    allowCancel:false,
+    options:[
+      {
+        value:true,
+        label:"はい",
+        icon:"✓",
+        className:"yes",
+        sub:"魚チップを消費して発動",
+      },
+      {
+        value:false,
+        label:"いいえ",
+        icon:"×",
+        className:"no",
+        sub:"発動せずに戻る",
+      },
+    ],
+    onSelect:confirmed=>{
+      if(!confirmed){
+        renderFishPanel();
+        return;
+      }
+
+      if(!fishActionStillValid(action,target)){
+        log(
+          "状況が変わったため、"+
+          "この漁師効果は発動できませんでした。"
+        );
+        render();
+        return;
+      }
+
+      const currentPayment=
+        getHumanFishPayment(cost);
+
+      if(!currentPayment){
+        log(
+          "魚チップが不足したため、"+
+          "この漁師効果は発動できませんでした。"
+        );
+        render();
+        return;
+      }
+
+      executeFishAction(
+        action,
+        target,
+        currentPayment
+      );
+    },
+  });
 }
 
 function performFishAction(action){
@@ -3721,6 +3999,189 @@ function render(){
   onlineAfterRender();
 }
 
+const BOARD_PING_DURATION_MS=3000;
+
+function updatePingButtons(){
+  const buttons=[
+    $("desktopPingBtn"),
+    $("mobilePingBtn"),
+  ].filter(Boolean);
+
+  for(const button of buttons){
+    button.classList.toggle(
+      "active",
+      boardPingMode
+    );
+    button.setAttribute(
+      "aria-pressed",
+      boardPingMode?"true":"false"
+    );
+    button.textContent=
+      boardPingMode
+        ?"📍場所を選択"
+        :"📍ピン";
+  }
+
+  $("board")?.classList.toggle(
+    "ping-mode",
+    boardPingMode
+  );
+}
+
+function toggleBoardPingMode(){
+  if(!game || game.winner!==null) return;
+
+  boardPingMode=!boardPingMode;
+  updatePingButtons();
+
+  if(
+    boardPingMode &&
+    typeof setMobileGameView==="function"
+  ){
+    setMobileGameView("board");
+  }
+}
+
+function queueBoardPing(x,y){
+  if(!game) return;
+
+  const player=
+    typeof localPlayer==="function"
+      ?localPlayer()
+      :game.players?.[0];
+
+  if(!player) return;
+
+  if(!Array.isArray(game.pingEvents)){
+    game.pingEvents=[];
+  }
+
+  game.pingEvents.push({
+    id:
+      `ping-${player.id}-${Date.now()}-`+
+      `${Math.random().toString(36).slice(2)}`,
+    playerId:player.id,
+    playerName:player.name,
+    playerColor:player.color,
+    x:Number(x),
+    y:Number(y),
+    createdAt:Date.now(),
+  });
+
+  game.pingEvents=game.pingEvents.slice(-32);
+}
+
+function activeBoardPings(){
+  const now=Date.now();
+
+  return (game?.pingEvents||[]).filter(event=>{
+    const age=now-Number(event?.createdAt||0);
+
+    return (
+      event &&
+      Number.isFinite(Number(event.x)) &&
+      Number.isFinite(Number(event.y)) &&
+      age>=-1000 &&
+      age<BOARD_PING_DURATION_MS
+    );
+  });
+}
+
+function renderBoardPings(){
+  const events=activeBoardPings();
+
+  for(const event of events){
+    const group=createSvg("g",{
+      class:"board-ping",
+      "data-ping-id":event.id||"",
+    });
+
+    const outer=createSvg("circle",{
+      cx:event.x,
+      cy:event.y,
+      r:31,
+      class:"board-ping-ring board-ping-ring-outer",
+      stroke:event.playerColor||"#ffffff",
+    });
+
+    const inner=createSvg("circle",{
+      cx:event.x,
+      cy:event.y,
+      r:13,
+      class:"board-ping-ring board-ping-ring-inner",
+      stroke:event.playerColor||"#ffffff",
+    });
+
+    const pin=createSvg("text",{
+      x:event.x,
+      y:event.y-8,
+      class:"board-ping-icon",
+    });
+    pin.textContent="📍";
+
+    const label=createSvg("text",{
+      x:event.x,
+      y:event.y+34,
+      class:"board-ping-label",
+      fill:event.playerColor||"#ffffff",
+    });
+    label.textContent=event.playerName||"プレイヤー";
+
+    group.appendChild(outer);
+    group.appendChild(inner);
+    group.appendChild(pin);
+    group.appendChild(label);
+    svg.appendChild(group);
+
+    const remaining=Math.max(
+      40,
+      BOARD_PING_DURATION_MS-
+      (Date.now()-Number(event.createdAt||0))
+    );
+
+    setTimeout(()=>{
+      const selector=
+        `[data-ping-id="${CSS.escape(event.id||"")}"]`;
+      svg.querySelector(selector)?.remove();
+    },remaining);
+  }
+}
+
+function handleBoardPingPointer(event){
+  if(!boardPingMode || !game) return false;
+
+  const ctm=svg.getScreenCTM();
+  if(!ctm) return false;
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+
+  const point=svg.createSVGPoint();
+  point.x=event.clientX;
+  point.y=event.clientY;
+
+  const localPoint=
+    point.matrixTransform(ctm.inverse());
+
+  queueBoardPing(localPoint.x,localPoint.y);
+
+  boardPingMode=false;
+  updatePingButtons();
+  render();
+
+  return true;
+}
+
+function openDesktopLog(){
+  renderLog();
+  $("desktopLogModal")?.classList.remove("hidden");
+}
+
+function closeDesktopLog(){
+  $("desktopLogModal")?.classList.add("hidden");
+}
+
 function bindRobberHexTarget(element,hexId){
   if(
     !element ||
@@ -4093,8 +4554,11 @@ function renderBoard(){
     svg.appendChild(hit);
   }
 
+  renderBoardPings();
+
   boardBuildFinished=true;
   applyMobileBoardCrop();
+  updatePingButtons();
   releaseBoardSnapshot();
 
   // 読み込みイベントが返らない特殊な環境でも、永久に覆わないための保険。
@@ -4552,6 +5016,119 @@ function syncMobileTurnPanelPlacement(){
   }
 }
 
+const DESKTOP_1080_WIDTH=1920;
+const DESKTOP_1080_HEIGHT=1080;
+
+function desktop1080FitAvailable(){
+  const smartphone=
+    typeof isSmartphoneGameViewport==="function"
+      ?isSmartphoneGameViewport()
+      :window.matchMedia(
+        "(max-width: 720px)"
+      ).matches;
+
+  return !smartphone;
+}
+
+function updateDesktop1080Fit(){
+  const stage=$("desktopFitStage");
+  const button=$("desktop1080FitBtn");
+
+  if(!stage || !button) return;
+
+  const inGame=
+    document.body.classList.contains(
+      "online-game-mode"
+    );
+
+  const active=
+    desktop1080FitEnabled &&
+    inGame &&
+    desktop1080FitAvailable();
+
+  document.body.classList.toggle(
+    "desktop-1080-fit",
+    active
+  );
+
+  if(!active){
+    stage.style.removeProperty(
+      "--desktop-1080-scale"
+    );
+    stage.style.removeProperty("left");
+    stage.style.removeProperty("top");
+
+    button.classList.remove("active");
+    button.textContent="1920×1080";
+    button.title=
+      "ゲーム画面を仮想1920×1080で"+
+      "表示領域に合わせる";
+    return;
+  }
+
+  const viewportWidth=
+    Math.max(1,window.innerWidth);
+  const viewportHeight=
+    Math.max(1,window.innerHeight);
+
+  const scale=Math.min(
+    viewportWidth/DESKTOP_1080_WIDTH,
+    viewportHeight/DESKTOP_1080_HEIGHT
+  );
+
+  const renderedWidth=
+    DESKTOP_1080_WIDTH*scale;
+  const renderedHeight=
+    DESKTOP_1080_HEIGHT*scale;
+
+  const left=
+    Math.max(
+      0,
+      (viewportWidth-renderedWidth)/2
+    );
+
+  const top=
+    Math.max(
+      0,
+      (viewportHeight-renderedHeight)/2
+    );
+
+  stage.style.setProperty(
+    "--desktop-1080-scale",
+    String(scale)
+  );
+  stage.style.left=`${left}px`;
+  stage.style.top=`${top}px`;
+
+  button.classList.add("active");
+  button.textContent="通常表示";
+  button.title=
+    `1920×1080仮想表示：`+
+    `${Math.round(scale*100)}%で縮小中`;
+}
+
+function toggleDesktop1080Fit(){
+  desktop1080FitEnabled=
+    !desktop1080FitEnabled;
+
+  localStorage.setItem(
+    DESKTOP_1080_FIT_STORAGE_KEY,
+    desktop1080FitEnabled?"1":"0"
+  );
+
+  updateDesktop1080Fit();
+
+  /*
+    仮想解像度へ切り替えた直後に、
+    盤面の切り抜き・配置を再計算する。
+  */
+  requestAnimationFrame(()=>{
+    applyMobileBoardCrop();
+    syncMobileTurnPanelPlacement();
+    fitFishermenPlayerDetails();
+  });
+}
+
 function setMobileGameView(view,scrollToTop=true){
   if(!["board","actions","info"].includes(view)){
     view="board";
@@ -4677,8 +5254,10 @@ function setupResponsiveGameUi(){
   });
 
   setMobileGameView("board",false);
+  updateDesktop1080Fit();
 
   window.addEventListener("resize",()=>{
+    updateDesktop1080Fit();
     applyMobileBoardCrop();
     syncMobileTurnPanelPlacement();
     fitFishermenPlayerDetails();
@@ -4689,6 +5268,7 @@ function setupResponsiveGameUi(){
       const main=$("gameMain");
       const aside=main?.querySelector("aside");
       if(aside) aside.scrollTop=0;
+      updateDesktop1080Fit();
       applyMobileBoardCrop();
       syncMobileTurnPanelPlacement();
     },120);
@@ -4745,6 +5325,47 @@ $("tradeCancelBtn").addEventListener("click",closeTradeModal);
 $("tradeConfirmBtn").addEventListener("click",submitPlayerTrade);
 $("resultBtn").addEventListener("click",openResultModal);
 $("desktopResultBtn").addEventListener("click",openResultModal);
+
+$("desktopPingBtn").addEventListener(
+  "click",
+  toggleBoardPingMode
+);
+$("mobilePingBtn").addEventListener(
+  "click",
+  toggleBoardPingMode
+);
+
+svg.addEventListener(
+  "pointerdown",
+  event=>{
+    if(boardPingMode){
+      handleBoardPingPointer(event);
+    }
+  },
+  true
+);
+
+$("desktopLogBtn").addEventListener(
+  "click",
+  openDesktopLog
+);
+
+$("desktop1080FitBtn").addEventListener(
+  "click",
+  toggleDesktop1080Fit
+);
+$("desktopLogCloseBtn").addEventListener(
+  "click",
+  closeDesktopLog
+);
+$("desktopLogModal").addEventListener(
+  "click",
+  event=>{
+    if(event.target===$("desktopLogModal")){
+      closeDesktopLog();
+    }
+  }
+);
 $("resultCloseBtn").addEventListener("click",closeResultModal);
 $("resultCloseTopBtn").addEventListener("click",closeResultModal);
 $("resultModal").addEventListener("click",event=>{

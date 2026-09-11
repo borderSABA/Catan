@@ -1,13 +1,74 @@
 "use strict";
 
 const ONLINE_MODE = true;
+const GAME_ID = "catan";
+const GAME_NAME = "カタン";
+const MAX_PLAYERS = 6;
+const WORKER_ORIGIN = String(window.CATAN_SERVER_URL||"").replace(/\/+$/,'');
+const COMMON_MANAGER_URL =
+  "https://boardgame-hub-api.naitoryo7110.workers.dev";
+const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const ONLINE_STORAGE = {
-  clientId:"catan-online-client-id",
-  name:"catan-online-player-name",
-  roomId:"catan-online-room-id",
-};
-const SERVER_ORIGIN = String(window.CATAN_SERVER_URL||"").replace(/\/+$/,"");
+const APP_VERSION = "v1.43";
+const NAME_DRAFT_KEY = `${GAME_ID}-online-name-draft`;
+const ACTIVE_ROOM_KEY = `${GAME_ID}-online-room`;
+const ACTIVE_NAME_KEY = `${GAME_ID}-online-active-name`;
+const ONLINE_STORAGE = { roomId:ACTIVE_ROOM_KEY };
+const SERVER_ORIGIN = WORKER_ORIGIN;
+
+function commonSavedName(){
+  return String(
+    localStorage.getItem(COMMON_PLAYER_NAME_KEY) || ""
+  ).trim().slice(0,32);
+}
+
+function saveCommonNameOnActualStart(playerName){
+  const name=String(playerName||"").trim().slice(0,32);
+  if(!name) return;
+  localStorage.setItem(COMMON_PLAYER_NAME_KEY,name);
+}
+
+function tokenKey(roomId){
+  return `${GAME_ID}-online-token-${roomId}`;
+}
+
+function getToken(roomId){
+  let token=localStorage.getItem(tokenKey(roomId));
+  if(!token){
+    token=(crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`)
+      .replace(/-/g,"");
+    localStorage.setItem(tokenKey(roomId),token);
+  }
+  return token;
+}
+
+let actionSeq=0;
+function newActionId(prefix="op"){
+  actionSeq=(actionSeq+1)%1000000;
+  return [
+    prefix,
+    Date.now(),
+    actionSeq,
+    Math.random().toString(36).slice(2,8),
+  ].join("-");
+}
+
+async function checkRoomJoin(roomId,playerName,token){
+  const url=new URL(`${WORKER_ORIGIN}/join-check`);
+  url.searchParams.set("roomId",roomId);
+  url.searchParams.set("name",playerName);
+  url.searchParams.set("token",token);
+
+  const response=await fetch(url,{cache:"no-store"});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){
+    const error=new Error(data.error||"ROOMへ参加できません。");
+    error.status=response.status;
+    throw error;
+  }
+  return data;
+}
+
 
 let onlineSocket = null;
 let onlineRoomState = null;
@@ -19,11 +80,8 @@ let roomRefreshTimer = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 
-function makeClientId(){
-  return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-const ONLINE_CLIENT_ID = localStorage.getItem(ONLINE_STORAGE.clientId) || makeClientId();
-localStorage.setItem(ONLINE_STORAGE.clientId,ONLINE_CLIENT_ID);
+let ONLINE_CLIENT_ID = null;
+let commonNameSavedForSession = null;
 
 function localPlayerId(){
   if(!game) return -1;
@@ -128,7 +186,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.42");
+    showOnlineMessage(`入室する部屋を選択してください。現在の版：${APP_VERSION}`);
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -136,23 +194,29 @@ async function fetchRoomSummaries(){
 
 function renderRoomCards(rooms){
   const byId=new Map(rooms.map(room=>[room.roomId,room]));
+  const activeRoom=localStorage.getItem(ACTIVE_ROOM_KEY);
 
   $("roomCards").innerHTML=ROOM_IDS.map((roomId,index)=>{
     const room=byId.get(roomId)||{
       phase:"lobby",
       connected:0,
       members:0,
+      participants:[],
       emptyResetAt:null,
       settings:{playerCount:4,fishermen:true,cpuFill:true},
     };
 
     const playing=room.phase==="playing";
-    const full=room.connected>=6;
+    const currentCount=Number(room.members ?? room.connected ?? 0);
+    const full=currentCount>=MAX_PLAYERS;
     const roomNumber=index+1;
+    const reconnecting=activeRoom===roomId && !!localStorage.getItem(tokenKey(roomId));
+    const joinDisabled=(playing && !reconnecting) || (full && !reconnecting);
+    const playerNames=Array.isArray(room.participants)
+      ? room.participants.map(player=>String(player?.name||"").trim()).filter(Boolean)
+      : [];
 
-    let stateText=playing?"対戦中":"ロビー";
     let resetNotice="";
-
     if(playing && room.connected===0){
       if(room.emptyResetAt){
         const remainingMs=Math.max(0,room.emptyResetAt-Date.now());
@@ -164,16 +228,17 @@ function renderRoomCards(rooms){
     }
 
     return `<article class="room-card ${playing?"playing":""} ${full?"full":""}">
-      <span class="room-card-title">部屋 ${roomNumber}</span>
-      <span class="room-card-state">${stateText}</span>
-      <span class="room-card-count">接続 ${room.connected}/6人</span>
+      <span class="room-card-title">ROOM ${roomNumber}</span>
+      <span class="room-card-state">${playing?"ゲーム中":"待機中"}</span>
+      <span class="room-card-count">${currentCount} / ${MAX_PLAYERS}人</span>
+      <span class="room-card-players">参加者：${playerNames.length?playerNames.map(escapeHtml).join("、"):"なし"}</span>
       ${resetNotice?`<span class="room-card-reset-notice">${resetNotice}</span>`:""}
       <div class="room-card-actions">
         <button
           class="room-join-button"
           data-join-room="${roomId}"
-          ${playing||full?"disabled":""}
-        >${playing?"対戦中":"入室"}</button>
+          ${joinDisabled?"disabled":""}
+        >${reconnecting?"再接続":"参加"}</button>
         <button
           class="room-reset-button danger"
           data-reset-room="${roomId}"
@@ -198,28 +263,26 @@ function renderRoomCards(rooms){
 async function manualResetRoomFromTitle(roomId){
   if(!ROOM_IDS.includes(roomId)) return;
 
-  showOnlineMessage(`部屋 ${ROOM_IDS.indexOf(roomId)+1}を初期化しています……`);
+  showOnlineMessage(`ROOM ${ROOM_IDS.indexOf(roomId)+1}を初期化しています……`);
 
   try{
     const response=await fetch(
-      `${SERVER_ORIGIN}/reset-room?room=${encodeURIComponent(roomId)}`,
-      {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-      }
+      `${WORKER_ORIGIN}/reset-empty?roomId=${encodeURIComponent(roomId)}`,
+      {method:"POST",cache:"no-store"}
     );
-
     const result=await response.json().catch(()=>({}));
-
     if(!response.ok){
-      throw new Error(result.message||result.error||`HTTP ${response.status}`);
+      throw new Error(result.error||"ROOMを初期化できませんでした。");
     }
 
-    localStorage.removeItem(ONLINE_STORAGE.roomId);
-    showOnlineMessage(`部屋 ${ROOM_IDS.indexOf(roomId)+1}を初期化しました。`);
+    if(localStorage.getItem(ACTIVE_ROOM_KEY)===roomId){
+      localStorage.removeItem(ACTIVE_ROOM_KEY);
+      localStorage.removeItem(ACTIVE_NAME_KEY);
+    }
+    showOnlineMessage(`ROOM ${ROOM_IDS.indexOf(roomId)+1}を初期化しました。`);
     await fetchRoomSummaries();
   }catch(error){
-    showOnlineMessage(`部屋を初期化できません：${error.message}`,true);
+    showOnlineMessage(error.message||"ROOMを初期化できませんでした。",true);
   }
 }
 
@@ -227,40 +290,75 @@ function confirmManualRoomReset(roomId){
   const roomNumber=ROOM_IDS.indexOf(roomId)+1;
 
   openConfirmModal(
-    `部屋 ${roomNumber}を初期化`,
-    "対戦状況、参加者、ホスト情報をすべて消します。対戦中の人がいる場合も強制終了します。",
+    `ROOM ${roomNumber}を初期化`,
+    `ROOM ${roomNumber} を初期化しますか？`,
     ()=>manualResetRoomFromTitle(roomId)
   );
 }
 
 function currentOnlineName(){
-  return ($("onlinePlayerName").value||"").trim().slice(0,12);
+  return ($("onlinePlayerName").value||"").trim().slice(0,32);
 }
-function joinOnlineRoom(roomId){
-  const name=currentOnlineName();
+function scheduleReconnect(){
+  clearTimeout(reconnectTimer);
+  if(!onlineRoomId) return;
+  reconnectAttempts++;
+  const wait=Math.min(8000,800*reconnectAttempts);
+  reconnectTimer=setTimeout(()=>{
+    joinOnlineRoom(onlineRoomId,{reconnect:true});
+  },wait);
+}
+
+async function joinOnlineRoom(roomId,{reconnect=false}={}){
+  if(!ROOM_IDS.includes(roomId)) return;
+
+  const name=currentOnlineName() || localStorage.getItem(ACTIVE_NAME_KEY) || "";
   if(!name){
     showOnlineMessage("名前を入力してください。",true);
     $("onlinePlayerName").focus();
     return;
   }
-  localStorage.setItem(ONLINE_STORAGE.name,name);
+
+  const token=getToken(roomId);
+  try{
+    showOnlineMessage(reconnect?"再接続を確認しています……":"ROOMへ参加できるか確認しています……");
+    await checkRoomJoin(roomId,name,token);
+  }catch(error){
+    showOnlineMessage(error.message||"ROOMへ参加できません。",true);
+    if(reconnect && (!error.status || error.status>=500)){
+      scheduleReconnect();
+    }
+    return;
+  }
+
+  ONLINE_CLIENT_ID=token;
   onlineRoomId=roomId;
-  localStorage.setItem(ONLINE_STORAGE.roomId,roomId);
   clearTimeout(reconnectTimer);
-  if(onlineSocket) onlineSocket.close();
+
+  const previousSocket=onlineSocket;
+  onlineSocket=null;
+  try{ previousSocket?.close(); }catch{}
+
   const url=new URL(`${wsOrigin()}/ws`);
   url.searchParams.set("room",roomId);
-  url.searchParams.set("clientId",ONLINE_CLIENT_ID);
+  url.searchParams.set("clientId",token);
   url.searchParams.set("name",name);
-  showOnlineMessage("部屋へ接続しています……");
-  onlineSocket=new WebSocket(url);
+  showOnlineMessage(reconnect?"ROOMへ再接続しています……":"ROOMへ接続しています……");
+
+  const socket=new WebSocket(url);
+  onlineSocket=socket;
   setSocketState("接続中","");
 
-  onlineSocket.addEventListener("open",()=>{
+  socket.addEventListener("open",()=>{
+    if(onlineSocket!==socket) return;
     reconnectAttempts=0;
+    localStorage.setItem(ACTIVE_ROOM_KEY,roomId);
+    localStorage.setItem(ACTIVE_NAME_KEY,name);
     setSocketState("接続中","connected");
   });
-  onlineSocket.addEventListener("message",event=>{
+
+  socket.addEventListener("message",event=>{
+    if(onlineSocket!==socket) return;
     let message;
     try{ message=JSON.parse(event.data); }catch{ return; }
     if(message.type==="error"){
@@ -273,25 +371,22 @@ function joinOnlineRoom(roomId){
       }
       return;
     }
-
     if(message.type==="room_state"){
       receiveRoomState(message.state);
     }
   });
-  onlineSocket.addEventListener("close",()=>{
+
+  socket.addEventListener("close",()=>{
+    if(onlineSocket!==socket) return;
     setSocketState("切断","disconnected");
-    if(onlineRoomId){
-      reconnectAttempts++;
-      const wait=Math.min(8000,800*reconnectAttempts);
-      reconnectTimer=setTimeout(()=>joinOnlineRoom(onlineRoomId),wait);
-    }
+    if(onlineRoomId) scheduleReconnect();
   });
-  onlineSocket.addEventListener("error",()=>{
+
+  socket.addEventListener("error",()=>{
+    if(onlineSocket!==socket) return;
     setSocketState("接続エラー","disconnected");
   });
 }
-
-const APP_VERSION="v1.42";
 
 function isSmartphoneGameViewport(){
   return window.matchMedia(
@@ -396,6 +491,16 @@ function showGameScreen(){
 function receiveRoomState(state){
   onlineRoomState=state;
   onlineRoomId=state.roomId;
+
+  const started=state.phase==="playing" || state.gameStarted===true;
+  const sessionId=state.gameSessionId||null;
+  if(started && sessionId && commonNameSavedForSession!==sessionId){
+    saveCommonNameOnActualStart(
+      localStorage.getItem(ACTIVE_NAME_KEY) || currentOnlineName()
+    );
+    commonNameSavedForSession=sessionId;
+  }
+
   renderOnlineLobby();
   if(state.phase==="playing" && state.game){
     applyingRemoteState=true;
@@ -434,7 +539,7 @@ function receiveRoomState(state){
 
     enforceResourceIntegrity();
     showGameScreen();
-    $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
+    $("currentRoomLabel").textContent=`ROOM ${ROOM_IDS.indexOf(state.roomId)+1}`;
 
     const mobileReturnButton=$("mobileReturnLobbyBtn");
     if(mobileReturnButton){
@@ -477,7 +582,7 @@ function renderOnlineLobby(){
   $("roomSelectView").classList.add("hidden");
   $("joinedRoomView").classList.remove("hidden");
   const roomNumber=ROOM_IDS.indexOf(onlineRoomState.roomId)+1;
-  $("joinedRoomTitle").textContent=`部屋 ${roomNumber}`;
+  $("joinedRoomTitle").textContent=`ROOM ${roomNumber}`;
   $("joinedRoomStatus").textContent=onlineRoomState.phase==="playing"?"対戦中":"参加者が揃うのを待っています。";
 
   const connectedMembers=onlineRoomState.members.filter(member=>member.connected);
@@ -539,6 +644,7 @@ function sendSettings(){
   if(!isOnlineHost()) return;
   onlineSend({
     type:"set_settings",
+    actionId:newActionId("settings"),
     settings:{
       playerCount:Number($("playerCount").value),
       fishermen:$("fishermenEnabled").checked,
@@ -611,12 +717,14 @@ function startOnlineGame(){
   log(`人間${members.length}人＋CPU${cpuCount}人で対戦を開始しました。`);
   if(game.fishermen) log("漁師拡張を使用します。");
   suppressOnlineSync=false;
-  onlineSend({type:"start_game",game:cloneGameForNetwork()});
+  onlineSend({type:"start_game",actionId:newActionId("start"),game:cloneGameForNetwork()});
 }
 
 function leaveOnlineRoom(){
   onlineRoomId=null;
-  localStorage.removeItem(ONLINE_STORAGE.roomId);
+  ONLINE_CLIENT_ID=null;
+  localStorage.removeItem(ACTIVE_ROOM_KEY);
+  localStorage.removeItem(ACTIVE_NAME_KEY);
   clearTimeout(reconnectTimer);
   if(onlineSocket?.readyState===WebSocket.OPEN) onlineSend({type:"leave"});
   onlineSocket?.close();
@@ -634,7 +742,7 @@ function leaveOnlineRoom(){
 
 function resetOnlineRoom(){
   if(!isOnlineHost()) return;
-  onlineSend({type:"reset_room"});
+  onlineSend({type:"reset_room",actionId:newActionId("reset")});
 }
 
 function initOnlineApp(){
@@ -659,9 +767,34 @@ function initOnlineApp(){
       }
     },120);
   });
+
+  document.addEventListener("visibilitychange",()=>{
+    if(
+      document.visibilityState==="visible" &&
+      onlineRoomId &&
+      (!onlineSocket || onlineSocket.readyState!==WebSocket.OPEN)
+    ){
+      scheduleReconnect();
+    }
+  });
+
+  window.addEventListener("online",()=>{
+    if(
+      onlineRoomId &&
+      (!onlineSocket || onlineSocket.readyState!==WebSocket.OPEN)
+    ){
+      scheduleReconnect();
+    }
+  });
+
   showLobbyScreen();
-  const savedName=localStorage.getItem(ONLINE_STORAGE.name)||"";
+
+  const savedRoom=localStorage.getItem(ACTIVE_ROOM_KEY);
+  const activeName=localStorage.getItem(ACTIVE_NAME_KEY);
+  const nameDraft=sessionStorage.getItem(NAME_DRAFT_KEY);
+  const savedName=(nameDraft ?? activeName ?? commonSavedName() ?? "").trim().slice(0,32);
   $("onlinePlayerName").value=savedName;
+
   $("refreshRoomsBtn").addEventListener("click",fetchRoomSummaries);
   $("leaveRoomLobbyBtn").addEventListener("click",leaveOnlineRoom);
   $("leaveRoomGameBtn").addEventListener("click",leaveOnlineRoom);
@@ -673,9 +806,8 @@ function initOnlineApp(){
   $("playerCount").addEventListener("change",sendSettings);
   $("fishermenEnabled").addEventListener("change",sendSettings);
   $("cpuFillEnabled").addEventListener("change",sendSettings);
-  $("onlinePlayerName").addEventListener("change",()=>{
-    const name=currentOnlineName();
-    if(name) localStorage.setItem(ONLINE_STORAGE.name,name);
+  $("onlinePlayerName").addEventListener("input",event=>{
+    sessionStorage.setItem(NAME_DRAFT_KEY,event.target.value);
   });
 
   fetchRoomSummaries();
@@ -684,9 +816,8 @@ function initOnlineApp(){
   },5000);
 
   const requestedRoom=new URLSearchParams(location.search).get("room");
-  const savedRoom=localStorage.getItem(ONLINE_STORAGE.roomId);
   const roomToJoin=ROOM_IDS.includes(requestedRoom)?requestedRoom:savedRoom;
   if(ROOM_IDS.includes(roomToJoin) && savedName){
-    joinOnlineRoom(roomToJoin);
+    joinOnlineRoom(roomToJoin,{reconnect:true});
   }
 }

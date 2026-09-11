@@ -1,4 +1,4 @@
-# カタン オンライン版 v1.42
+# カタン オンライン版 v1.43
 
 GitHub Pages＋Cloudflare Workers＋Durable Objectsで動く私用オンライン版です。
 

@@ -1,0 +1,63 @@
+獲得演出画像の差し替え名
+
+ボロ靴：
+old-boot.webp / old-boot.png / old-boot.svg
+
+最大騎士団：
+largest-army.webp / largest-army.png / largest-army.svg
+
+最長交易路：
+longest-road.webp / longest-road.png / longest-road.svg
+
+読み込み優先順位は webp → png → svg です。
+推奨サイズは512×512pxの正方形です。
+
+
+発展カード演出（v1.22追加）
+
+発展カードを引いた時の共通画像：
+development-card.webp
+development-card.png
+development-card.svg
+
+騎士：
+dev-knight.webp
+dev-knight.png
+dev-knight.svg
+
+独占：
+dev-monopoly.webp
+dev-monopoly.png
+dev-monopoly.svg
+
+発見：
+dev-discovery.webp
+dev-discovery.png
+dev-discovery.svg
+
+街道建設：
+dev-road-building.webp
+dev-road-building.png
+dev-road-building.svg
+
+勝利点：
+dev-victory-point.webp
+dev-victory-point.png
+dev-victory-point.svg
+
+読み込み優先順位は webp → png → svg です。
+推奨画像サイズは512×512pxです。
+
+
+専用演出（v1.23追加）
+
+7の盗賊登場：
+CSSの盗賊アイコンアニメーションを使用します。
+
+漁師の盗賊追放：
+CSSの魚と盗賊アイコンアニメーションを使用します。
+
+漁師の資源強奪：
+fish-steal.webp
+fish-steal.png
+fish-steal.svg

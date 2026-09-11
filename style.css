@@ -567,6 +567,7 @@ button.active { outline: 3px solid #f59e0b; }
 .room-card-title { display: block; font-size: 22px; }
 .room-card-state { display: block; margin-top: 9px; font-size: 13px; }
 .room-card-count { display: block; margin-top: 6px; font-weight: 900; }
+.room-card-players { display: block; margin-top: 6px; min-height: 34px; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 .online-refresh { display: block; width: min(260px,100%); margin: 14px auto 0; }
 .joined-room-heading {
   display: flex;
@@ -1532,7 +1533,7 @@ input {
 
 @media (max-width: 430px) {
   .room-cards {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2,minmax(0,1fr));
   }
 
   .room-card {

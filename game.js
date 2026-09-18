@@ -1023,6 +1023,7 @@ function newGame(){
     freeRoads:0,
     rolled:false,
     diceRolling:false,
+    diceRollStartedAt:null,
     dice:[0,0],
     turnDice:[0,0],
     diceHistory:[],
@@ -1779,26 +1780,65 @@ function rollDice(){
 
 function animateDiceRoll(playerId,afterResolve){
   if(game.diceRolling) return;
+
+  const startedAt=Date.now();
+  const rollDurationMs=760;
+
   game.diceRolling=true;
+  game.diceRollStartedAt=startedAt;
+
   const d1=$("die1"), d2=$("die2");
-  d1.classList.add("rolling"); d2.classList.add("rolling");
+  d1.classList.add("rolling");
+  d2.classList.add("rolling");
   render();
+
   let ticks=0;
+  let finished=false;
+
+  const finishRoll=()=>{
+    if(finished) return;
+    finished=true;
+    clearInterval(interval);
+
+    d1.classList.remove("rolling");
+    d2.classList.remove("rolling");
+
+    game.diceRolling=false;
+    game.diceRollStartedAt=null;
+
+    const finalDice=[1+rand(6),1+rand(6)];
+    resolveDiceRoll(
+      playerId,
+      finalDice,
+      afterResolve
+    );
+  };
+
   const interval=setInterval(()=>{
     game.dice=[1+rand(6),1+rand(6)];
-    d1.textContent=game.dice[0]; d2.textContent=game.dice[1];
+    d1.textContent=game.dice[0];
+    d2.textContent=game.dice[1];
     ticks++;
-    if(ticks>=11){
-      clearInterval(interval);
-      d1.classList.remove("rolling"); d2.classList.remove("rolling");
-      game.diceRolling=false;
-      const finalDice=[1+rand(6),1+rand(6)];
-      resolveDiceRoll(playerId,finalDice,afterResolve);
+
+    /*
+      背景タブなどでsetIntervalが間引かれても、
+      回数ではなく実時間でも終了判定する。
+    */
+    if(
+      ticks>=11 ||
+      Date.now()-startedAt>=rollDurationMs
+    ){
+      finishRoll();
     }
   },65);
 }
 
 function resolveDiceRoll(playerId,dice,afterResolve){
+  /*
+    どの経路から呼ばれてもロール中フラグを残さない。
+  */
+  game.diceRolling=false;
+  game.diceRollStartedAt=null;
   game.dice=[...dice];
   game.turnDice=[...dice];
   game.rolled=true;

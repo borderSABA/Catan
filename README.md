@@ -1,4 +1,4 @@
-# カタン オンライン版 v1.43
+# カタン オンライン版 v1.42
 
 GitHub Pages＋Cloudflare Workers＋Durable Objectsで動く私用オンライン版です。
 
@@ -982,3 +982,14 @@ CPUの漁師効果には確認画面を表示しません。
 
 この版はCloudflare Worker側にも `board_ping` 通信を追加しているため、
 GitHub PagesだけでなくWorkerの再デプロイも必要です。
+
+
+## v1.43 ダイスロール停止・再接続修正
+
+- ダイス演出終了をコールバック回数だけでなく実時間でも判定
+- `diceRollStartedAt` を保持し、ロール終了時に必ずクリア
+- 再接続時に残った `diceRolling=true` を復旧可能に変更
+- タブ復帰・ネットワーク復帰時に再接続を補強
+- 古いWebSocketのcloseイベントが新しい接続を切断扱いにする競合を修正
+
+この版はWorker側も変更されています。

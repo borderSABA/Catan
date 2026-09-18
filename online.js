@@ -1,74 +1,13 @@
 "use strict";
 
 const ONLINE_MODE = true;
-const GAME_ID = "catan";
-const GAME_NAME = "カタン";
-const MAX_PLAYERS = 6;
-const WORKER_ORIGIN = String(window.CATAN_SERVER_URL||"").replace(/\/+$/,'');
-const COMMON_MANAGER_URL =
-  "https://boardgame-hub-api.naitoryo7110.workers.dev";
-const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.43";
-const NAME_DRAFT_KEY = `${GAME_ID}-online-name-draft`;
-const ACTIVE_ROOM_KEY = `${GAME_ID}-online-room`;
-const ACTIVE_NAME_KEY = `${GAME_ID}-online-active-name`;
-const ONLINE_STORAGE = { roomId:ACTIVE_ROOM_KEY };
-const SERVER_ORIGIN = WORKER_ORIGIN;
-
-function commonSavedName(){
-  return String(
-    localStorage.getItem(COMMON_PLAYER_NAME_KEY) || ""
-  ).trim().slice(0,32);
-}
-
-function saveCommonNameOnActualStart(playerName){
-  const name=String(playerName||"").trim().slice(0,32);
-  if(!name) return;
-  localStorage.setItem(COMMON_PLAYER_NAME_KEY,name);
-}
-
-function tokenKey(roomId){
-  return `${GAME_ID}-online-token-${roomId}`;
-}
-
-function getToken(roomId){
-  let token=localStorage.getItem(tokenKey(roomId));
-  if(!token){
-    token=(crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`)
-      .replace(/-/g,"");
-    localStorage.setItem(tokenKey(roomId),token);
-  }
-  return token;
-}
-
-let actionSeq=0;
-function newActionId(prefix="op"){
-  actionSeq=(actionSeq+1)%1000000;
-  return [
-    prefix,
-    Date.now(),
-    actionSeq,
-    Math.random().toString(36).slice(2,8),
-  ].join("-");
-}
-
-async function checkRoomJoin(roomId,playerName,token){
-  const url=new URL(`${WORKER_ORIGIN}/join-check`);
-  url.searchParams.set("roomId",roomId);
-  url.searchParams.set("name",playerName);
-  url.searchParams.set("token",token);
-
-  const response=await fetch(url,{cache:"no-store"});
-  const data=await response.json().catch(()=>({}));
-  if(!response.ok){
-    const error=new Error(data.error||"ROOMへ参加できません。");
-    error.status=response.status;
-    throw error;
-  }
-  return data;
-}
-
+const ONLINE_STORAGE = {
+  clientId:"catan-online-client-id",
+  name:"catan-online-player-name",
+  roomId:"catan-online-room-id",
+};
+const SERVER_ORIGIN = String(window.CATAN_SERVER_URL||"").replace(/\/+$/,"");
 
 let onlineSocket = null;
 let onlineRoomState = null;
@@ -79,9 +18,13 @@ let onlineSyncTimer = null;
 let roomRefreshTimer = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let diceRecoveryRequestedFor = null;
 
-let ONLINE_CLIENT_ID = null;
-let commonNameSavedForSession = null;
+function makeClientId(){
+  return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+const ONLINE_CLIENT_ID = localStorage.getItem(ONLINE_STORAGE.clientId) || makeClientId();
+localStorage.setItem(ONLINE_STORAGE.clientId,ONLINE_CLIENT_ID);
 
 function localPlayerId(){
   if(!game) return -1;
@@ -186,7 +129,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage(`入室する部屋を選択してください。現在の版：${APP_VERSION}`);
+    showOnlineMessage("入室する部屋を選択してください。現在の版：v1.42");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -194,29 +137,23 @@ async function fetchRoomSummaries(){
 
 function renderRoomCards(rooms){
   const byId=new Map(rooms.map(room=>[room.roomId,room]));
-  const activeRoom=localStorage.getItem(ACTIVE_ROOM_KEY);
 
   $("roomCards").innerHTML=ROOM_IDS.map((roomId,index)=>{
     const room=byId.get(roomId)||{
       phase:"lobby",
       connected:0,
       members:0,
-      participants:[],
       emptyResetAt:null,
       settings:{playerCount:4,fishermen:true,cpuFill:true},
     };
 
     const playing=room.phase==="playing";
-    const currentCount=Number(room.members ?? room.connected ?? 0);
-    const full=currentCount>=MAX_PLAYERS;
+    const full=room.connected>=6;
     const roomNumber=index+1;
-    const reconnecting=activeRoom===roomId && !!localStorage.getItem(tokenKey(roomId));
-    const joinDisabled=(playing && !reconnecting) || (full && !reconnecting);
-    const playerNames=Array.isArray(room.participants)
-      ? room.participants.map(player=>String(player?.name||"").trim()).filter(Boolean)
-      : [];
 
+    let stateText=playing?"対戦中":"ロビー";
     let resetNotice="";
+
     if(playing && room.connected===0){
       if(room.emptyResetAt){
         const remainingMs=Math.max(0,room.emptyResetAt-Date.now());
@@ -228,17 +165,16 @@ function renderRoomCards(rooms){
     }
 
     return `<article class="room-card ${playing?"playing":""} ${full?"full":""}">
-      <span class="room-card-title">ROOM ${roomNumber}</span>
-      <span class="room-card-state">${playing?"ゲーム中":"待機中"}</span>
-      <span class="room-card-count">${currentCount} / ${MAX_PLAYERS}人</span>
-      <span class="room-card-players">参加者：${playerNames.length?playerNames.map(escapeHtml).join("、"):"なし"}</span>
+      <span class="room-card-title">部屋 ${roomNumber}</span>
+      <span class="room-card-state">${stateText}</span>
+      <span class="room-card-count">接続 ${room.connected}/6人</span>
       ${resetNotice?`<span class="room-card-reset-notice">${resetNotice}</span>`:""}
       <div class="room-card-actions">
         <button
           class="room-join-button"
           data-join-room="${roomId}"
-          ${joinDisabled?"disabled":""}
-        >${reconnecting?"再接続":"参加"}</button>
+          ${playing||full?"disabled":""}
+        >${playing?"対戦中":"入室"}</button>
         <button
           class="room-reset-button danger"
           data-reset-room="${roomId}"
@@ -263,26 +199,28 @@ function renderRoomCards(rooms){
 async function manualResetRoomFromTitle(roomId){
   if(!ROOM_IDS.includes(roomId)) return;
 
-  showOnlineMessage(`ROOM ${ROOM_IDS.indexOf(roomId)+1}を初期化しています……`);
+  showOnlineMessage(`部屋 ${ROOM_IDS.indexOf(roomId)+1}を初期化しています……`);
 
   try{
     const response=await fetch(
-      `${WORKER_ORIGIN}/reset-empty?roomId=${encodeURIComponent(roomId)}`,
-      {method:"POST",cache:"no-store"}
+      `${SERVER_ORIGIN}/reset-room?room=${encodeURIComponent(roomId)}`,
+      {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+      }
     );
+
     const result=await response.json().catch(()=>({}));
+
     if(!response.ok){
-      throw new Error(result.error||"ROOMを初期化できませんでした。");
+      throw new Error(result.message||result.error||`HTTP ${response.status}`);
     }
 
-    if(localStorage.getItem(ACTIVE_ROOM_KEY)===roomId){
-      localStorage.removeItem(ACTIVE_ROOM_KEY);
-      localStorage.removeItem(ACTIVE_NAME_KEY);
-    }
-    showOnlineMessage(`ROOM ${ROOM_IDS.indexOf(roomId)+1}を初期化しました。`);
+    localStorage.removeItem(ONLINE_STORAGE.roomId);
+    showOnlineMessage(`部屋 ${ROOM_IDS.indexOf(roomId)+1}を初期化しました。`);
     await fetchRoomSummaries();
   }catch(error){
-    showOnlineMessage(error.message||"ROOMを初期化できませんでした。",true);
+    showOnlineMessage(`部屋を初期化できません：${error.message}`,true);
   }
 }
 
@@ -290,60 +228,99 @@ function confirmManualRoomReset(roomId){
   const roomNumber=ROOM_IDS.indexOf(roomId)+1;
 
   openConfirmModal(
-    `ROOM ${roomNumber}を初期化`,
-    `ROOM ${roomNumber} を初期化しますか？`,
+    `部屋 ${roomNumber}を初期化`,
+    "対戦状況、参加者、ホスト情報をすべて消します。対戦中の人がいる場合も強制終了します。",
     ()=>manualResetRoomFromTitle(roomId)
   );
 }
 
 function currentOnlineName(){
-  return ($("onlinePlayerName").value||"").trim().slice(0,32);
+  return ($("onlinePlayerName").value||"").trim().slice(0,12);
 }
-function scheduleReconnect(){
-  clearTimeout(reconnectTimer);
+
+function scheduleOnlineReconnect(delay=null){
   if(!onlineRoomId) return;
+
+  if(
+    onlineSocket &&
+    (
+      onlineSocket.readyState===WebSocket.OPEN ||
+      onlineSocket.readyState===WebSocket.CONNECTING
+    )
+  ){
+    return;
+  }
+
+  clearTimeout(reconnectTimer);
   reconnectAttempts++;
-  const wait=Math.min(8000,800*reconnectAttempts);
+
+  const wait=delay===null
+    ?Math.min(8000,800*reconnectAttempts)
+    :Math.max(0,Number(delay)||0);
+
   reconnectTimer=setTimeout(()=>{
-    joinOnlineRoom(onlineRoomId,{reconnect:true});
+    if(onlineRoomId){
+      joinOnlineRoom(onlineRoomId);
+    }
   },wait);
 }
 
-async function joinOnlineRoom(roomId,{reconnect=false}={}){
-  if(!ROOM_IDS.includes(roomId)) return;
+function requestStaleDiceRecovery(){
+  if(!game?.diceRolling || game.rolled) return;
 
-  const name=currentOnlineName() || localStorage.getItem(ACTIVE_NAME_KEY) || "";
+  const key=
+    `${game.turnSerial||0}:`+
+    `${game.current}:`+
+    `${game.diceRollStartedAt||"legacy"}`;
+
+  if(diceRecoveryRequestedFor===key) return;
+
+  const startedAt=
+    Number(game.diceRollStartedAt)||0;
+
+  const stale=
+    !startedAt ||
+    Date.now()-startedAt>=3000;
+
+  if(!stale) return;
+
+  diceRecoveryRequestedFor=key;
+  onlineSend({
+    type:"recover_dice_roll",
+    turnSerial:game.turnSerial,
+  });
+}
+
+function joinOnlineRoom(roomId){
+  const name=currentOnlineName();
   if(!name){
     showOnlineMessage("名前を入力してください。",true);
     $("onlinePlayerName").focus();
     return;
   }
-
-  const token=getToken(roomId);
-  try{
-    showOnlineMessage(reconnect?"再接続を確認しています……":"ROOMへ参加できるか確認しています……");
-    await checkRoomJoin(roomId,name,token);
-  }catch(error){
-    showOnlineMessage(error.message||"ROOMへ参加できません。",true);
-    if(reconnect && (!error.status || error.status>=500)){
-      scheduleReconnect();
-    }
-    return;
-  }
-
-  ONLINE_CLIENT_ID=token;
+  localStorage.setItem(ONLINE_STORAGE.name,name);
   onlineRoomId=roomId;
+  localStorage.setItem(ONLINE_STORAGE.roomId,roomId);
   clearTimeout(reconnectTimer);
 
+  /*
+    再接続時は古いsocketのcloseイベントを
+    新しい接続へ影響させない。
+  */
   const previousSocket=onlineSocket;
   onlineSocket=null;
-  try{ previousSocket?.close(); }catch{}
+  if(
+    previousSocket &&
+    previousSocket.readyState!==WebSocket.CLOSED
+  ){
+    try{ previousSocket.close(); }catch{}
+  }
 
   const url=new URL(`${wsOrigin()}/ws`);
   url.searchParams.set("room",roomId);
-  url.searchParams.set("clientId",token);
+  url.searchParams.set("clientId",ONLINE_CLIENT_ID);
   url.searchParams.set("name",name);
-  showOnlineMessage(reconnect?"ROOMへ再接続しています……":"ROOMへ接続しています……");
+  showOnlineMessage("部屋へ接続しています……");
 
   const socket=new WebSocket(url);
   onlineSocket=socket;
@@ -352,11 +329,8 @@ async function joinOnlineRoom(roomId,{reconnect=false}={}){
   socket.addEventListener("open",()=>{
     if(onlineSocket!==socket) return;
     reconnectAttempts=0;
-    localStorage.setItem(ACTIVE_ROOM_KEY,roomId);
-    localStorage.setItem(ACTIVE_NAME_KEY,name);
     setSocketState("接続中","connected");
   });
-
   socket.addEventListener("message",event=>{
     if(onlineSocket!==socket) return;
     let message;
@@ -371,22 +345,29 @@ async function joinOnlineRoom(roomId,{reconnect=false}={}){
       }
       return;
     }
+
     if(message.type==="room_state"){
       receiveRoomState(message.state);
     }
   });
-
   socket.addEventListener("close",()=>{
+    /* 古いsocketのcloseは新しい接続へ干渉させない */
     if(onlineSocket!==socket) return;
-    setSocketState("切断","disconnected");
-    if(onlineRoomId) scheduleReconnect();
-  });
 
+    onlineSocket=null;
+    setSocketState("切断","disconnected");
+
+    if(onlineRoomId){
+      scheduleOnlineReconnect();
+    }
+  });
   socket.addEventListener("error",()=>{
     if(onlineSocket!==socket) return;
     setSocketState("接続エラー","disconnected");
   });
 }
+
+const APP_VERSION="v1.43";
 
 function isSmartphoneGameViewport(){
   return window.matchMedia(
@@ -491,16 +472,6 @@ function showGameScreen(){
 function receiveRoomState(state){
   onlineRoomState=state;
   onlineRoomId=state.roomId;
-
-  const started=state.phase==="playing" || state.gameStarted===true;
-  const sessionId=state.gameSessionId||null;
-  if(started && sessionId && commonNameSavedForSession!==sessionId){
-    saveCommonNameOnActualStart(
-      localStorage.getItem(ACTIVE_NAME_KEY) || currentOnlineName()
-    );
-    commonNameSavedForSession=sessionId;
-  }
-
   renderOnlineLobby();
   if(state.phase==="playing" && state.game){
     applyingRemoteState=true;
@@ -514,6 +485,9 @@ function receiveRoomState(state){
     if(!Array.isArray(game.resourcePopEvents)) game.resourcePopEvents=[];
     if(!Array.isArray(game.turnAnnouncementEvents)) game.turnAnnouncementEvents=[];
     if(!Array.isArray(game.diceHistory)) game.diceHistory=[];
+    if(!Object.prototype.hasOwnProperty.call(game,"diceRollStartedAt")){
+      game.diceRollStartedAt=null;
+    }
     if(!Array.isArray(game.turnDice)){
       game.turnDice=game.rolled && Array.isArray(game.dice)
         ?[...game.dice]
@@ -539,7 +513,7 @@ function receiveRoomState(state){
 
     enforceResourceIntegrity();
     showGameScreen();
-    $("currentRoomLabel").textContent=`ROOM ${ROOM_IDS.indexOf(state.roomId)+1}`;
+    $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
 
     const mobileReturnButton=$("mobileReturnLobbyBtn");
     if(mobileReturnButton){
@@ -564,6 +538,12 @@ function receiveRoomState(state){
 
     handleOnlinePendingUI();
     scheduleCpuIfNeeded();
+
+    /*
+      ダイス演出中に切断された状態が残っていたら、
+      Workerへ安全な復旧を要求する。
+    */
+    requestStaleDiceRecovery();
   }else{
     game=null;
     closeChoiceModal();
@@ -582,7 +562,7 @@ function renderOnlineLobby(){
   $("roomSelectView").classList.add("hidden");
   $("joinedRoomView").classList.remove("hidden");
   const roomNumber=ROOM_IDS.indexOf(onlineRoomState.roomId)+1;
-  $("joinedRoomTitle").textContent=`ROOM ${roomNumber}`;
+  $("joinedRoomTitle").textContent=`部屋 ${roomNumber}`;
   $("joinedRoomStatus").textContent=onlineRoomState.phase==="playing"?"対戦中":"参加者が揃うのを待っています。";
 
   const connectedMembers=onlineRoomState.members.filter(member=>member.connected);
@@ -644,7 +624,6 @@ function sendSettings(){
   if(!isOnlineHost()) return;
   onlineSend({
     type:"set_settings",
-    actionId:newActionId("settings"),
     settings:{
       playerCount:Number($("playerCount").value),
       fishermen:$("fishermenEnabled").checked,
@@ -717,14 +696,12 @@ function startOnlineGame(){
   log(`人間${members.length}人＋CPU${cpuCount}人で対戦を開始しました。`);
   if(game.fishermen) log("漁師拡張を使用します。");
   suppressOnlineSync=false;
-  onlineSend({type:"start_game",actionId:newActionId("start"),game:cloneGameForNetwork()});
+  onlineSend({type:"start_game",game:cloneGameForNetwork()});
 }
 
 function leaveOnlineRoom(){
   onlineRoomId=null;
-  ONLINE_CLIENT_ID=null;
-  localStorage.removeItem(ACTIVE_ROOM_KEY);
-  localStorage.removeItem(ACTIVE_NAME_KEY);
+  localStorage.removeItem(ONLINE_STORAGE.roomId);
   clearTimeout(reconnectTimer);
   if(onlineSocket?.readyState===WebSocket.OPEN) onlineSend({type:"leave"});
   onlineSocket?.close();
@@ -742,12 +719,28 @@ function leaveOnlineRoom(){
 
 function resetOnlineRoom(){
   if(!isOnlineHost()) return;
-  onlineSend({type:"reset_room",actionId:newActionId("reset")});
+  onlineSend({type:"reset_room"});
 }
 
 function initOnlineApp(){
   window.addEventListener("resize",()=>{
     syncGameChromeForViewport();
+  });
+
+  document.addEventListener("visibilitychange",()=>{
+    if(
+      document.visibilityState==="visible" &&
+      onlineRoomId
+    ){
+      scheduleOnlineReconnect(0);
+      requestStaleDiceRecovery();
+    }
+  });
+
+  window.addEventListener("online",()=>{
+    if(onlineRoomId){
+      scheduleOnlineReconnect(0);
+    }
   });
 
   window.addEventListener("orientationchange",()=>{
@@ -767,34 +760,9 @@ function initOnlineApp(){
       }
     },120);
   });
-
-  document.addEventListener("visibilitychange",()=>{
-    if(
-      document.visibilityState==="visible" &&
-      onlineRoomId &&
-      (!onlineSocket || onlineSocket.readyState!==WebSocket.OPEN)
-    ){
-      scheduleReconnect();
-    }
-  });
-
-  window.addEventListener("online",()=>{
-    if(
-      onlineRoomId &&
-      (!onlineSocket || onlineSocket.readyState!==WebSocket.OPEN)
-    ){
-      scheduleReconnect();
-    }
-  });
-
   showLobbyScreen();
-
-  const savedRoom=localStorage.getItem(ACTIVE_ROOM_KEY);
-  const activeName=localStorage.getItem(ACTIVE_NAME_KEY);
-  const nameDraft=sessionStorage.getItem(NAME_DRAFT_KEY);
-  const savedName=(nameDraft ?? activeName ?? commonSavedName() ?? "").trim().slice(0,32);
+  const savedName=localStorage.getItem(ONLINE_STORAGE.name)||"";
   $("onlinePlayerName").value=savedName;
-
   $("refreshRoomsBtn").addEventListener("click",fetchRoomSummaries);
   $("leaveRoomLobbyBtn").addEventListener("click",leaveOnlineRoom);
   $("leaveRoomGameBtn").addEventListener("click",leaveOnlineRoom);
@@ -806,8 +774,9 @@ function initOnlineApp(){
   $("playerCount").addEventListener("change",sendSettings);
   $("fishermenEnabled").addEventListener("change",sendSettings);
   $("cpuFillEnabled").addEventListener("change",sendSettings);
-  $("onlinePlayerName").addEventListener("input",event=>{
-    sessionStorage.setItem(NAME_DRAFT_KEY,event.target.value);
+  $("onlinePlayerName").addEventListener("change",()=>{
+    const name=currentOnlineName();
+    if(name) localStorage.setItem(ONLINE_STORAGE.name,name);
   });
 
   fetchRoomSummaries();
@@ -816,8 +785,9 @@ function initOnlineApp(){
   },5000);
 
   const requestedRoom=new URLSearchParams(location.search).get("room");
+  const savedRoom=localStorage.getItem(ONLINE_STORAGE.roomId);
   const roomToJoin=ROOM_IDS.includes(requestedRoom)?requestedRoom:savedRoom;
   if(ROOM_IDS.includes(roomToJoin) && savedName){
-    joinOnlineRoom(roomToJoin,{reconnect:true});
+    joinOnlineRoom(roomToJoin);
   }
 }

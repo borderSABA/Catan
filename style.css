@@ -3968,7 +3968,7 @@ input {
   and (orientation: portrait) {
 
   /*
-    スマホ用のX1-X19・Y3-Y17切り取りを解除。
+    スマホ用のX1-X20・Y3-Y17切り取りを解除。
     JS側でもclip-pathを外すが、CSSでも確実に上書きする。
   */
   #gameMain.mobile-view-board #board,
@@ -5041,7 +5041,7 @@ body.desktop-1080-fit
 }
 
 
-/* v1.45：オンラインボドゲ共通化 実装規格v4 ROOM配置 */
+/* v1.49：オンラインボドゲ共通化 実装規格v4 ROOM配置 */
 .room-cards {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

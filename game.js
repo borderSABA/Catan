@@ -27,6 +27,8 @@ let cpuScheduledKey = null;
 
 let cpuDiscardTimer = null;
 let cpuDiscardScheduledKey = null;
+const cpuStrategicGoalCache = new Map();
+const cpuRoadSequenceCache = new Map();
 
 let discardQueue = [];
 let discardSelection = null;
@@ -965,6 +967,8 @@ function makePlayer(id, human, name=null, clientId=null){
     fishTokens:[],
     fishSwapTurn:-1,
     builtThisTurn:false,
+    cpuPlan:null,
+    cpuTradeTurnSerial:-1,
     knightsPlayed:0, revealedVP:0, longestRoad:0,
     hasLongestRoad:false, hasLargestArmy:false,
   };
@@ -981,6 +985,8 @@ function createFishSupply(large){
 }
 
 function newGame(){
+  cpuStrategicGoalCache.clear();
+  cpuRoadSequenceCache.clear();
   clearTimeout(cpuTimer);
   cpuTimer=null;
   cpuActionRunning=false;
@@ -2121,6 +2127,18 @@ function hideDiscardModal(){
   if(modal) modal.classList.add("hidden");
 }
 
+function cpuStableTie(value){
+  const text=String(value??"");
+  let hash=2166136261;
+
+  for(let i=0;i<text.length;i++){
+    hash^=text.charCodeAt(i);
+    hash=Math.imul(hash,16777619);
+  }
+
+  return ((hash>>>0)%1000)/1000;
+}
+
 function cpuBuildingMultiplier(building){
   return building?.type==="city" ? 2 : 1;
 }
@@ -2153,9 +2171,15 @@ function cpuResourceProduction(player,resource){
       }
 
       if(hex.number){
+        const robberFactor=
+          game.robberHex===hexId
+            ?0.22
+            :1;
+
         score +=
           (PIPS[hex.number]||0)*
-          multiplier;
+          multiplier*
+          robberFactor;
       }
     }
   }
@@ -2305,6 +2329,54 @@ function cpuVertexStrategicScore(
 
   score += resourceSet.size*2.25;
   score += numberSet.size*.55;
+
+  if(
+    setup &&
+    player &&
+    player.settlements.length>=1
+  ){
+    const production=
+      cpuProductionResources(player);
+
+    for(const resource of RESOURCES){
+      if(
+        resourceSet.has(resource) &&
+        (production[resource]||0)<=0
+      ){
+        score+=4.1;
+      }
+    }
+
+    /*
+      2軒の初期配置で同じ数字へ偏りすぎるのを抑える。
+      片方が止まっても全生産が止まりにくくする。
+    */
+    const existingNumbers=new Set();
+
+    for(const settlementId of player.settlements){
+      for(
+        const hexId of
+        game.board.vertices[
+          settlementId
+        ]?.hexes||[]
+      ){
+        const number=
+          game.board.hexes[
+            hexId
+          ]?.number;
+
+        if(number){
+          existingNumbers.add(number);
+        }
+      }
+    }
+
+    for(const number of numberSet){
+      if(existingNumbers.has(number)){
+        score-=1.15;
+      }
+    }
+  }
   score += cpuVertexHarborBonus(
     vertexId,
     playerId
@@ -2321,9 +2393,1093 @@ function cpuVertexStrategicScore(
     同点付近だけわずかな揺らぎを持たせ、
     毎回完全に同じ初期配置にはしない。
   */
-  score += Math.random()*.12;
+  score += cpuStableTie(`vertex:${vertexId}`)*.035;
 
   return score;
+}
+
+function cpuStrategyProfile(player){
+  const production=
+    cpuProductionResources(player);
+
+  const expandPower=
+    (production.wood||0)+
+    (production.brick||0)+
+    (production.wool||0)*.65+
+    (production.grain||0)*.8;
+
+  const cityPower=
+    (production.ore||0)*1.28+
+    (production.grain||0)*1.12;
+
+  if(
+    cityPower>=expandPower*1.18 &&
+    (production.ore||0)>=4
+  ){
+    return "city";
+  }
+
+  if(
+    expandPower>=cityPower*1.12
+  ){
+    return "expand";
+  }
+
+  return "balanced";
+}
+
+function cpuNetworkVertices(player){
+  const vertices=new Set([
+    ...player.settlements,
+    ...player.cities,
+  ]);
+
+  for(const edgeId of player.roads){
+    const edge=game.board.edges[edgeId];
+    if(!edge) continue;
+
+    vertices.add(edge.a);
+    vertices.add(edge.b);
+  }
+
+  return [...vertices];
+}
+
+function cpuExpansionPathToVertex(
+  player,
+  targetId,
+  maxRoads=5
+){
+  const starts=
+    cpuNetworkVertices(player);
+
+  if(!starts.length) return null;
+
+  const bestCost=new Map();
+  const queue=[];
+
+  for(const startId of starts){
+    bestCost.set(startId,0);
+    queue.push({
+      vertexId:startId,
+      cost:0,
+      roadPath:[],
+    });
+  }
+
+  while(queue.length){
+    queue.sort(
+      (a,b)=>a.cost-b.cost
+    );
+
+    const current=queue.shift();
+
+    if(
+      current.cost>
+      (bestCost.get(current.vertexId)??Infinity)
+    ){
+      continue;
+    }
+
+    if(current.vertexId===targetId){
+      return current.roadPath;
+    }
+
+    const vertex=
+      game.board.vertices[
+        current.vertexId
+      ];
+
+    if(!vertex) continue;
+
+    const blockingBuilding=
+      vertex.building &&
+      vertex.building.player!==player.id;
+
+    if(
+      blockingBuilding &&
+      current.vertexId!==targetId
+    ){
+      continue;
+    }
+
+    for(const edgeId of vertex.edges){
+      const edge=
+        game.board.edges[edgeId];
+
+      if(!edge) continue;
+
+      if(
+        edge.road!==null &&
+        edge.road!==player.id
+      ){
+        continue;
+      }
+
+      const nextId=
+        otherEnd(
+          edgeId,
+          current.vertexId
+        );
+
+      const nextVertex=
+        game.board.vertices[nextId];
+
+      if(!nextVertex) continue;
+
+      if(
+        nextVertex.building &&
+        nextVertex.building.player!==player.id &&
+        nextId!==targetId
+      ){
+        continue;
+      }
+
+      const extraCost=
+        edge.road===player.id
+          ?0
+          :1;
+
+      const nextCost=
+        current.cost+extraCost;
+
+      if(nextCost>maxRoads){
+        continue;
+      }
+
+      if(
+        nextCost>=
+        (bestCost.get(nextId)??Infinity)
+      ){
+        continue;
+      }
+
+      bestCost.set(
+        nextId,
+        nextCost
+      );
+
+      queue.push({
+        vertexId:nextId,
+        cost:nextCost,
+        roadPath:
+          edge.road===player.id
+            ?[...current.roadPath]
+            :[
+              ...current.roadPath,
+              edgeId,
+            ],
+      });
+    }
+  }
+
+  return null;
+}
+
+function cpuTurnsUntilPlayer(
+  playerId,
+  fromPlayerId=game.current
+){
+  if(!game?.playerCount) return 1;
+
+  let distance=
+    (playerId-fromPlayerId+game.playerCount)%
+    game.playerCount;
+
+  if(distance===0){
+    distance=game.playerCount;
+  }
+
+  return distance;
+}
+
+function cpuSettlementContestInfo(
+  player,
+  targetId,
+  ownRoadsNeeded=0
+){
+  let minOpponentRoads=99;
+  let strongestThreat=0;
+  let strongestOpponentId=null;
+
+  for(const other of game.players){
+    if(other.id===player.id) continue;
+
+    const path=
+      cpuExpansionPathToVertex(
+        other,
+        targetId,
+        Math.min(
+          5,
+          Math.max(2,ownRoadsNeeded+2)
+        )
+      );
+
+    if(!path) continue;
+
+    const roadsNeeded=path.length;
+    const turnsUntil=
+      cpuTurnsUntilPlayer(
+        other.id,
+        player.id
+      );
+    const hand=totalResources(other);
+
+    minOpponentRoads=
+      Math.min(
+        minOpponentRoads,
+        roadsNeeded
+      );
+
+    let threat=
+      Math.max(
+        0,
+        13-
+        roadsNeeded*4.1-
+        turnsUntil*.9
+      );
+
+    if(roadsNeeded===0){
+      threat+=8;
+    }else if(roadsNeeded===1){
+      threat+=4.5;
+    }
+
+    if(hand>=8){
+      threat+=3.2;
+    }else if(hand>=5){
+      threat+=1.6;
+    }
+
+    if(publicVP(other)>=7){
+      threat+=2.4;
+    }
+
+    if(roadsNeeded<ownRoadsNeeded){
+      threat+=
+        (ownRoadsNeeded-roadsNeeded)*3.5;
+    }
+
+    if(threat>strongestThreat){
+      strongestThreat=threat;
+      strongestOpponentId=other.id;
+    }
+  }
+
+  if(minOpponentRoads===99){
+    return {
+      minOpponentRoads:null,
+      strongestThreat:0,
+      strongestOpponentId:null,
+      urgencyBonus:0,
+      hopelessPenalty:0,
+    };
+  }
+
+  let urgencyBonus=0;
+  let hopelessPenalty=0;
+
+  /*
+    同程度の距離なら「先に取られる前に取る」を優先。
+    逆に相手の方が大幅に近い遠距離候補は、
+    無理に追い続けず別地点へ切り替える。
+  */
+  if(
+    minOpponentRoads===0 &&
+    ownRoadsNeeded<=1
+  ){
+    urgencyBonus=18;
+  }else if(
+    minOpponentRoads<=ownRoadsNeeded &&
+    ownRoadsNeeded<=2
+  ){
+    urgencyBonus=
+      8+
+      strongestThreat*.45;
+  }
+
+  if(
+    ownRoadsNeeded>=3 &&
+    minOpponentRoads+1<ownRoadsNeeded
+  ){
+    hopelessPenalty=
+      (ownRoadsNeeded-minOpponentRoads)*9+
+      strongestThreat*.35;
+  }
+
+  return {
+    minOpponentRoads,
+    strongestThreat,
+    strongestOpponentId,
+    urgencyBonus,
+    hopelessPenalty,
+  };
+}
+
+function cpuTopExpansionPlans(player,limit=5){
+  const candidates=
+    Object.keys(game.board.vertices)
+      .filter(vertexId=>
+        canPlaceSettlement(
+          player.id,
+          vertexId,
+          true
+        )
+      );
+
+  const plans=[];
+
+  for(const targetId of candidates){
+    const roadPath=
+      cpuExpansionPathToVertex(
+        player,
+        targetId,
+        5
+      );
+
+    if(!roadPath) continue;
+
+    const roadsNeeded=
+      roadPath.length;
+
+    const vertexScore=
+      cpuVertexStrategicScore(
+        targetId,
+        player.id
+      );
+
+    const profile=
+      cpuStrategyProfile(player);
+
+    const roadPenalty=
+      profile==="expand"
+        ?6.2
+        :profile==="balanced"
+          ?7.2
+          :8.4;
+
+    const earlyBonus=
+      publicVP(player)<=4
+        ?7
+        :publicVP(player)<=6
+          ?3
+          :0;
+
+    const contest=
+      cpuSettlementContestInfo(
+        player,
+        targetId,
+        roadsNeeded
+      );
+
+    /*
+      v1.49:
+      競合相手が高得点なら、同じ開拓地点でも価値を上げる。
+      8～9点の相手に取られる候補は「自分の得」だけではなく
+      「相手の勝利を遅らせる価値」も持つ。
+    */
+    const contestOpponent=
+      contest.strongestOpponentId===null
+        ?null
+        :playerById(
+          contest.strongestOpponentId
+        );
+
+    const denialBonus=
+      contestOpponent
+        ?Math.max(
+          0,
+          publicVP(contestOpponent)-6
+        )*3.8
+        :0;
+
+    const score=
+      vertexScore*2.25-
+      roadsNeeded*roadPenalty+
+      earlyBonus+
+      (
+        roadsNeeded===0
+          ?8
+          :0
+      )+
+      contest.urgencyBonus-
+      contest.hopelessPenalty+
+      denialBonus;
+
+    plans.push({
+      targetId,
+      roadPath,
+      roadsNeeded,
+      nextRoadId:
+        roadPath[0]??null,
+      vertexScore,
+      contest,
+      denialBonus,
+      score,
+    });
+  }
+
+  plans.sort((a,b)=>{
+    if(Math.abs(b.score-a.score)>.001){
+      return b.score-a.score;
+    }
+    return String(a.targetId).localeCompare(
+      String(b.targetId)
+    );
+  });
+
+  return plans.slice(
+    0,
+    Math.max(1,limit)
+  );
+}
+
+function cpuBestExpansionPlan(player){
+  return cpuTopExpansionPlans(
+    player,
+    1
+  )[0]||null;
+}
+
+function cpuGoalDistance(
+  player,
+  goal,
+  resources=player.resources
+){
+  if(!goal?.cost) return 0;
+
+  const planCost=
+    cpuGoalPlanCost(goal);
+
+  let distance=0;
+
+  for(const resource of RESOURCES){
+    const missing=
+      Math.max(
+        0,
+        (planCost[resource]||0)-
+        (resources[resource]||0)
+      );
+
+    if(!missing) continue;
+
+    const production=
+      cpuResourceProduction(
+        player,
+        resource
+      );
+
+    const scarcity=
+      1+
+      6/
+      Math.max(
+        1,
+        production+1
+      );
+
+    distance+=
+      missing*scarcity;
+  }
+
+  return distance;
+}
+
+function cpuGoalPlanCost(goal){
+  if(!goal?.cost){
+    return emptyResourceCounts();
+  }
+
+  const result={...goal.cost};
+
+  if(
+    goal.kind==="road" &&
+    goal.expansionTargetId &&
+    goal.roadsNeeded>0
+  ){
+    for(const resource of RESOURCES){
+      result[resource]=
+        (COST.settlement[resource]||0)+
+        (COST.road[resource]||0)*
+        goal.roadsNeeded;
+    }
+  }
+
+  return result;
+}
+
+function cpuGoalMinimumActionTurns(goal){
+  if(
+    goal?.kind==="road" &&
+    goal.expansionTargetId &&
+    goal.roadsNeeded>0
+  ){
+    /*
+      このゲームは通常建設が1ターン1回なので、
+      道路N本＋開拓地は最低でもN+1ターン必要。
+    */
+    return goal.roadsNeeded+1;
+  }
+
+  return 1;
+}
+
+function cpuResourceExpectedPerTurn(
+  player,
+  resource
+){
+  const direct=
+    cpuResourceProduction(
+      player,
+      resource
+    )/36;
+
+  let tradeFlow=0;
+
+  for(const produced of RESOURCES){
+    if(produced===resource) continue;
+
+    const rate=
+      Math.max(
+        2,
+        getTradeRate(
+          player,
+          produced
+        )||4
+      );
+
+    tradeFlow+=
+      (
+        cpuResourceProduction(
+          player,
+          produced
+        )/36
+      )/rate;
+  }
+
+  /*
+    他資源は建設にも使うので、全量を交易へ回すとは見なさない。
+  */
+  return direct+tradeFlow*.42;
+}
+
+function cpuGoalEta(
+  player,
+  goal,
+  resources=player.resources
+){
+  if(!goal?.cost) return 99;
+
+  const planCost=
+    cpuGoalPlanCost(goal);
+
+  let resourceEta=0;
+  let missingTotal=0;
+
+  for(const resource of RESOURCES){
+    const missing=
+      Math.max(
+        0,
+        (planCost[resource]||0)-
+        (resources[resource]||0)
+      );
+
+    if(!missing) continue;
+
+    missingTotal+=missing;
+
+    const expected=
+      cpuResourceExpectedPerTurn(
+        player,
+        resource
+      );
+
+    const turns=
+      missing/
+      Math.max(.055,expected);
+
+    resourceEta=
+      Math.max(
+        resourceEta,
+        turns
+      );
+  }
+
+  const minimumTurns=
+    cpuGoalMinimumActionTurns(goal);
+
+  let eta=
+    Math.max(
+      minimumTurns,
+      resourceEta
+    );
+
+  /*
+    7枚超えで必要資源を抱える長期計画は少し不安定。
+  */
+  if(
+    totalResources(player)>=8 &&
+    missingTotal>=2
+  ){
+    eta+=.35;
+  }
+
+  return Math.min(20,eta);
+}
+
+function cpuGoalProductionGain(player,goal){
+  if(!goal) return 0;
+
+  if(
+    goal.kind==="settlement" &&
+    goal.targetId
+  ){
+    return (
+      vertexProductionScore(
+        goal.targetId
+      )/5
+    );
+  }
+
+  if(
+    goal.kind==="city" &&
+    goal.targetId
+  ){
+    /*
+      都市化で増えるのは、その開拓地1軒分と同じ追加生産。
+    */
+    return (
+      vertexProductionScore(
+        goal.targetId
+      )/5
+    );
+  }
+
+  if(
+    goal.kind==="road" &&
+    goal.expansionTargetId
+  ){
+    return (
+      vertexProductionScore(
+        goal.expansionTargetId
+      )/5
+    )/
+    Math.max(1,goal.roadsNeeded);
+  }
+
+  return 0;
+}
+
+function cpuGoalAwardValue(player,goal){
+  let value=0;
+
+  if(goal?.kind==="dev"){
+    const maxOpponentKnights=
+      Math.max(
+        0,
+        ...game.players
+          .filter(other=>other.id!==player.id)
+          .map(other=>other.knightsPlayed||0)
+      );
+
+    const gap=
+      maxOpponentKnights-
+      (player.knightsPlayed||0);
+
+    if(!player.hasLargestArmy){
+      if(gap<=0){
+        value+=13;
+      }else if(gap===1){
+        value+=8;
+      }else if(gap===2){
+        value+=3;
+      }
+    }
+  }
+
+  if(goal?.kind==="road"){
+    const opponents=
+      game.players.filter(
+        other=>other.id!==player.id
+      );
+
+    const leader=
+      Math.max(
+        4,
+        ...opponents.map(
+          other=>other.longestRoad||0
+        )
+      );
+
+    const roadsToLead=
+      Math.max(
+        0,
+        leader+1-
+        (player.longestRoad||0)
+      );
+
+    if(
+      !player.hasLongestRoad &&
+      roadsToLead<=2
+    ){
+      value+=
+        roadsToLead===1
+          ?16
+          :9;
+    }
+  }
+
+  return value;
+}
+
+function cpuProjectedLongestRoad(
+  player,
+  edgeId
+){
+  const edge=game.board.edges[edgeId];
+
+  if(
+    !edge ||
+    edge.road!==null
+  ){
+    return player.longestRoad||0;
+  }
+
+  edge.road=player.id;
+  player.roads.push(edgeId);
+
+  let projected=0;
+
+  try{
+    projected=
+      calculateLongestRoad(player.id);
+  }finally{
+    player.roads.pop();
+    edge.road=null;
+  }
+
+  return projected;
+}
+
+function cpuRoadAwardGain(player,goal){
+  if(
+    goal?.kind!=="road" ||
+    !goal.targetId ||
+    !canPlaceRoad(
+      player.id,
+      goal.targetId
+    )
+  ){
+    return 0;
+  }
+
+  const projected=
+    cpuProjectedLongestRoad(
+      player,
+      goal.targetId
+    );
+
+  if(projected<5){
+    return 0;
+  }
+
+  const opponentMaximum=
+    Math.max(
+      0,
+      ...game.players
+        .filter(other=>other.id!==player.id)
+        .map(other=>other.longestRoad||0)
+    );
+
+  const wouldHold=
+    player.hasLongestRoad
+      ?projected>=opponentMaximum
+      :projected>opponentMaximum;
+
+  return (
+    wouldHold &&
+    !player.hasLongestRoad
+  )
+    ?2
+    :0;
+}
+
+function cpuGoalImmediatePointGain(player,goal){
+  if(!goal) return 0;
+
+  let gain=0;
+
+  if(
+    goal.kind==="city" ||
+    goal.kind==="settlement"
+  ){
+    gain+=1;
+  }
+
+  gain+=
+    cpuRoadAwardGain(
+      player,
+      goal
+    );
+
+  return gain;
+}
+
+function cpuGoalTacticalWinBonus(player,goal){
+  if(
+    !goal ||
+    !cpuGoalBuildable(
+      player,
+      goal
+    )
+  ){
+    return 0;
+  }
+
+  const gain=
+    cpuGoalImmediatePointGain(
+      player,
+      goal
+    );
+
+  if(!gain) return 0;
+
+  const needed=
+    Math.max(
+      0,
+      victoryTarget(player)-
+      totalVP(player)
+    );
+
+  if(
+    needed>0 &&
+    gain>=needed
+  ){
+    /* 勝てる手は他の長期評価より必ず優先する。 */
+    return 260;
+  }
+
+  if(totalVP(player)>=7){
+    return gain*34;
+  }
+
+  return gain*9;
+}
+
+function cpuGoalOutcomeValue(player,goal){
+  const points=publicVP(player);
+  let value=0;
+
+  if(
+    goal.kind==="settlement" ||
+    goal.kind==="city"
+  ){
+    value+=14;
+
+    if(points>=7){
+      value+=12;
+    }
+  }
+
+  if(
+    goal.kind==="road" &&
+    goal.expansionTargetId
+  ){
+    value+=9;
+  }
+
+  if(goal.kind==="dev"){
+    value+=
+      points>=7
+        ?10
+        :5;
+  }
+
+  value+=
+    cpuGoalProductionGain(
+      player,
+      goal
+    )*3.4;
+
+  value+=
+    cpuGoalAwardValue(
+      player,
+      goal
+    );
+
+  value+=
+    cpuGoalTacticalWinBonus(
+      player,
+      goal
+    );
+
+  return value;
+}
+
+function cpuGoalKey(goal){
+  if(!goal) return null;
+
+  if(
+    goal.kind==="road" &&
+    goal.expansionTargetId
+  ){
+    return `expand:${goal.expansionTargetId}`;
+  }
+
+  if(goal.targetId!==null && goal.targetId!==undefined){
+    return `${goal.kind}:${goal.targetId}`;
+  }
+
+  return goal.kind;
+}
+
+function cpuRememberPlan(player,goal){
+  if(!player || !goal) return;
+
+  player.cpuPlan={
+    key:cpuGoalKey(goal),
+    kind:goal.kind,
+    targetId:goal.targetId??null,
+    expansionTargetId:
+      goal.expansionTargetId??null,
+    round:game.turnNo||0,
+    score:goal.strategicScore||0,
+  };
+}
+
+function cpuPersistentGoal(player,goals){
+  const plan=player?.cpuPlan;
+  if(!plan || !goals.length) return null;
+
+  const age=
+    (game.turnNo||0)-
+    (plan.round||0);
+
+  if(age>2){
+    return null;
+  }
+
+  return goals.find(
+    goal=>cpuGoalKey(goal)===plan.key
+  )||null;
+}
+
+function cpuGoalBuildable(player,goal){
+  if(!player || !goal) return false;
+
+  if(!hasCost(player,goal.cost)){
+    return false;
+  }
+
+  if(goal.kind==="city"){
+    return (
+      player.pieces.city>0 &&
+      canUpgradeCity(
+        player.id,
+        goal.targetId
+      )
+    );
+  }
+
+  if(goal.kind==="settlement"){
+    return (
+      player.pieces.settlement>0 &&
+      canPlaceSettlement(
+        player.id,
+        goal.targetId,
+        false
+      )
+    );
+  }
+
+  if(goal.kind==="road"){
+    return (
+      player.pieces.road>0 &&
+      !!goal.targetId &&
+      canPlaceRoad(
+        player.id,
+        goal.targetId
+      )
+    );
+  }
+
+  if(goal.kind==="dev"){
+    return game.devDeck.length>0;
+  }
+
+  return false;
+}
+
+function cpuExecuteGoal(player,goal){
+  if(!cpuGoalBuildable(player,goal)){
+    return false;
+  }
+
+  if(goal.kind==="city"){
+    placeCity(
+      player.id,
+      goal.targetId
+    );
+    player.builtThisTurn=true;
+    log(`${player.name}が都市を建てました。`);
+    return true;
+  }
+
+  if(goal.kind==="settlement"){
+    payCost(
+      player,
+      COST.settlement,
+      "開拓地建設"
+    );
+
+    placeSettlement(
+      player.id,
+      goal.targetId,
+      false
+    );
+
+    player.builtThisTurn=true;
+    log(`${player.name}が開拓地を建てました。`);
+    return true;
+  }
+
+  if(goal.kind==="road"){
+    placeRoad(
+      player.id,
+      goal.targetId,
+      false
+    );
+
+    player.builtThisTurn=true;
+    log(`${player.name}が街道を建てました。`);
+    return true;
+  }
+
+  if(goal.kind==="dev"){
+    return buyDev(player.id);
+  }
+
+  return false;
+}
+
+
+function cpuSimulatedResources(
+  player,
+  delta
+){
+  const simulated={
+    ...player.resources,
+  };
+
+  for(const resource of RESOURCES){
+    simulated[resource]=
+      Math.max(
+        0,
+        (simulated[resource]||0)+
+        (delta[resource]||0)
+      );
+  }
+
+  return simulated;
 }
 
 function cpuCityTargetScore(vertexId,playerId){
@@ -2356,7 +3512,7 @@ function cpuCityTargetScore(vertexId,playerId){
   return score;
 }
 
-function cpuBestSettlementTarget(player){
+function cpuTopSettlementTargets(player,limit=3){
   const candidates=
     Object.keys(game.board.vertices)
       .filter(vertexId=>
@@ -2367,33 +3523,59 @@ function cpuBestSettlementTarget(player){
         )
       );
 
-  if(!candidates.length) return null;
+  if(!candidates.length) return [];
 
-  candidates.sort(
-    (a,b)=>
-      cpuVertexStrategicScore(
-        b,
-        player.id
-      )-
-      cpuVertexStrategicScore(
-        a,
-        player.id
-      )
-  );
+  const expansionPlans=
+    cpuTopExpansionPlans(
+      player,
+      5
+    );
 
-  return {
-    id:candidates[0],
+  const expansionScoreByTarget=
+    new Map(
+      expansionPlans.map(plan=>[
+        plan.targetId,
+        8+
+        plan.contest.urgencyBonus*.35+
+        (plan.denialBonus||0)*.45,
+      ])
+    );
+
+  const scored=candidates.map(id=>({
+    id,
     score:
       cpuVertexStrategicScore(
-        candidates[0],
+        id,
         player.id
-      ),
-  };
+      )+
+      (expansionScoreByTarget.get(id)||0),
+  }));
+
+  scored.sort((a,b)=>{
+    if(Math.abs(b.score-a.score)>.001){
+      return b.score-a.score;
+    }
+    return String(a.id).localeCompare(
+      String(b.id)
+    );
+  });
+
+  return scored.slice(
+    0,
+    Math.max(1,limit)
+  );
 }
 
-function cpuBestCityTarget(player){
+function cpuBestSettlementTarget(player){
+  return cpuTopSettlementTargets(
+    player,
+    1
+  )[0]||null;
+}
+
+function cpuTopCityTargets(player,limit=3){
   if(!player.settlements.length){
-    return null;
+    return [];
   }
 
   const candidates=
@@ -2403,30 +3585,36 @@ function cpuBestCityTarget(player){
           player.id,
           vertexId
         )
-      );
-
-  if(!candidates.length) return null;
-
-  candidates.sort(
-    (a,b)=>
-      cpuCityTargetScore(
-        b,
-        player.id
-      )-
-      cpuCityTargetScore(
-        a,
-        player.id
       )
-  );
+      .map(id=>({
+        id,
+        score:
+          cpuCityTargetScore(
+            id,
+            player.id
+          ),
+      }));
 
-  return {
-    id:candidates[0],
-    score:
-      cpuCityTargetScore(
-        candidates[0],
-        player.id
-      ),
-  };
+  candidates.sort((a,b)=>{
+    if(Math.abs(b.score-a.score)>.001){
+      return b.score-a.score;
+    }
+    return String(a.id).localeCompare(
+      String(b.id)
+    );
+  });
+
+  return candidates.slice(
+    0,
+    Math.max(1,limit)
+  );
+}
+
+function cpuBestCityTarget(player){
+  return cpuTopCityTargets(
+    player,
+    1
+  )[0]||null;
 }
 
 function cpuResourceMissingCount(player,cost){
@@ -2444,36 +3632,710 @@ function cpuResourceMissingCount(player,cost){
   );
 }
 
-function cpuStrategicGoals(player){
-  const goals=[];
+function cpuVertexExpectedResourceRates(vertexId){
+  const result=Object.fromEntries(
+    RESOURCES.map(resource=>[resource,0])
+  );
 
-  const cityTarget=
-    player.pieces.city>0
-      ?cpuBestCityTarget(player)
-      :null;
+  const vertex=game.board.vertices[vertexId];
+  if(!vertex) return result;
 
-  if(cityTarget){
-    goals.push({
-      kind:"city",
-      cost:COST.city,
-      targetId:cityTarget.id,
-      boardScore:cityTarget.score,
-      base:111,
+  for(const hexId of vertex.hexes){
+    const hex=game.board.hexes[hexId];
+    if(!hex || !RESOURCES.includes(hex.resource)){
+      continue;
+    }
+
+    const pips=hex.number
+      ?(PIPS[hex.number]||0)
+      :0;
+
+    result[hex.resource]+=pips/36;
+  }
+
+  return result;
+}
+
+function cpuPlannerInitialRates(player){
+  const rates={};
+
+  for(const resource of RESOURCES){
+    rates[resource]=
+      Math.max(
+        .02,
+        cpuResourceExpectedPerTurn(
+          player,
+          resource
+        )
+      );
+  }
+
+  return rates;
+}
+
+function cpuPlannerCostForExpansion(plan){
+  const cost=emptyResourceCounts();
+
+  for(const resource of RESOURCES){
+    cost[resource]=
+      (COST.settlement[resource]||0)+
+      (COST.road[resource]||0)*
+      plan.roadsNeeded;
+  }
+
+  return cost;
+}
+
+function cpuPlannerMacros(player,goals){
+  const macros=[];
+
+  for(const plan of cpuTopExpansionPlans(player,4)){
+    if(player.pieces.settlement<=0) break;
+    if(plan.roadsNeeded>player.pieces.road) continue;
+
+    macros.push({
+      key:
+        plan.roadsNeeded>0
+          ?`expand:${plan.targetId}`
+          :`settlement:${plan.targetId}`,
+      kind:"expand",
+      targetId:plan.targetId,
+      cost:cpuPlannerCostForExpansion(plan),
+      actionTurns:plan.roadsNeeded+1,
+      roadsUsed:plan.roadsNeeded,
+      settlementUsed:1,
+      vpGain:1,
+      rateGain:
+        cpuVertexExpectedResourceRates(
+          plan.targetId
+        ),
+      utility:
+        plan.vertexScore*1.35+
+        plan.contest.urgencyBonus*.8-
+        plan.contest.hopelessPenalty*.45+
+        (plan.denialBonus||0)*.8,
+      unique:true,
     });
   }
 
-  const settlementTarget=
-    player.pieces.settlement>0
-      ?cpuBestSettlementTarget(player)
-      :null;
+  for(const target of cpuTopCityTargets(player,3)){
+    macros.push({
+      key:`city:${target.id}`,
+      kind:"city",
+      targetId:target.id,
+      cost:{...COST.city},
+      actionTurns:1,
+      cityUsed:1,
+      vpGain:1,
+      rateGain:
+        cpuVertexExpectedResourceRates(
+          target.id
+        ),
+      utility:target.score*.82,
+      unique:true,
+    });
+  }
 
-  if(settlementTarget){
+  if(game.devDeck.length){
+    const maxOpponentKnights=Math.max(
+      0,
+      ...game.players
+        .filter(other=>other.id!==player.id)
+        .map(other=>other.knightsPlayed||0)
+    );
+
+    const knightGap=
+      maxOpponentKnights-
+      (player.knightsPlayed||0);
+
+    let devUtility=8;
+    if(!player.hasLargestArmy){
+      if(knightGap<=0) devUtility+=16;
+      else if(knightGap===1) devUtility+=11;
+      else if(knightGap===2) devUtility+=5;
+    }
+    if(publicVP(player)>=7) devUtility+=9;
+
+    macros.push({
+      key:"dev",
+      kind:"dev",
+      targetId:null,
+      cost:{...COST.dev},
+      actionTurns:1,
+      vpGain:.20,
+      rateGain:emptyResourceCounts(),
+      utility:devUtility,
+      unique:false,
+    });
+  }
+
+  const roadSequence=
+    cpuBestRoadSequence(
+      player,
+      Math.min(4,player.pieces.road)
+    );
+
+  if(
+    roadSequence?.sequence?.length &&
+    (
+      roadSequence.awardGain>0 ||
+      roadSequence.projectedLongest>=
+        Math.max(4,(player.longestRoad||0)+2)
+    )
+  ){
+    const cost=emptyResourceCounts();
+    for(const resource of RESOURCES){
+      cost[resource]=
+        (COST.road[resource]||0)*
+        roadSequence.sequence.length;
+    }
+
+    macros.push({
+      key:`road:${roadSequence.sequence[0]}`,
+      kind:"roadAward",
+      targetId:roadSequence.sequence[0],
+      cost,
+      actionTurns:roadSequence.sequence.length,
+      roadsUsed:roadSequence.sequence.length,
+      vpGain:roadSequence.awardGain||0,
+      rateGain:emptyResourceCounts(),
+      utility:
+        roadSequence.projectedLongest*2.8+
+        (roadSequence.awardGain||0)*36-
+        roadSequence.sequence.length*3,
+      unique:true,
+    });
+  }
+
+  /*
+    現在の即時候補がマクロ一覧から漏れた場合も、
+    1手目として比較対象には残す。
+  */
+  for(const goal of goals){
+    const key=cpuGoalKey(goal);
+    if(macros.some(macro=>macro.key===key)) continue;
+
+    macros.push({
+      key,
+      kind:goal.kind,
+      targetId:goal.targetId??null,
+      cost:cpuGoalPlanCost(goal),
+      actionTurns:cpuGoalMinimumActionTurns(goal),
+      roadsUsed:goal.kind==="road"?1:0,
+      settlementUsed:goal.kind==="settlement"?1:0,
+      cityUsed:goal.kind==="city"?1:0,
+      vpGain:cpuGoalImmediatePointGain(player,goal),
+      rateGain:emptyResourceCounts(),
+      utility:Math.max(0,goal.boardScore||0)*.35,
+      unique:true,
+    });
+  }
+
+  return macros;
+}
+
+function cpuPlannerMacroApplicable(state,macro){
+  if(macro.unique && state.used.has(macro.key)){
+    return false;
+  }
+
+  if(
+    (macro.roadsUsed||0)>
+    state.roadPieces
+  ){
+    return false;
+  }
+
+  if(
+    (macro.settlementUsed||0)>
+    state.settlementPieces
+  ){
+    return false;
+  }
+
+  if(
+    (macro.cityUsed||0)>
+    state.cityPieces
+  ){
+    return false;
+  }
+
+  if(
+    macro.kind==="city" &&
+    state.settlements<=0
+  ){
+    return false;
+  }
+
+  if(
+    macro.kind==="dev" &&
+    state.devRemaining<=0
+  ){
+    return false;
+  }
+
+  return true;
+}
+
+function cpuPlannerEta(state,macro){
+  let resourceEta=0;
+
+  for(const resource of RESOURCES){
+    const missing=Math.max(
+      0,
+      (macro.cost[resource]||0)-
+      (state.resources[resource]||0)
+    );
+
+    if(!missing) continue;
+
+    resourceEta=Math.max(
+      resourceEta,
+      missing/
+        Math.max(
+          .035,
+          state.rates[resource]||0
+        )
+    );
+  }
+
+  return Math.min(
+    18,
+    Math.max(
+      macro.actionTurns||1,
+      resourceEta
+    )
+  );
+}
+
+function cpuPlannerApplyMacro(state,macro,depth){
+  const next={
+    ...state,
+    resources:{...state.resources},
+    rates:{...state.rates},
+    used:new Set(state.used),
+  };
+
+  const eta=cpuPlannerEta(
+    state,
+    macro
+  );
+
+  for(const resource of RESOURCES){
+    next.resources[resource]=
+      Math.max(
+        0,
+        (next.resources[resource]||0)+
+        (next.rates[resource]||0)*eta-
+        (macro.cost[resource]||0)
+      );
+  }
+
+  next.turns+=eta;
+  next.vp+=macro.vpGain||0;
+  next.roadPieces-=
+    macro.roadsUsed||0;
+  next.settlementPieces-=
+    macro.settlementUsed||0;
+  next.cityPieces-=
+    macro.cityUsed||0;
+
+  if(macro.kind==="expand"){
+    next.settlements++;
+  }else if(macro.kind==="city"){
+    next.settlements--;
+    next.cities++;
+    next.settlementPieces++;
+  }else if(macro.kind==="dev"){
+    next.devRemaining--;
+    next.devBuys++;
+  }
+
+  for(const resource of RESOURCES){
+    next.rates[resource]+=
+      macro.rateGain?.[resource]||0;
+  }
+
+  next.utility+=
+    (macro.utility||0)/
+    (1+depth*.32);
+
+  if(macro.unique){
+    next.used.add(macro.key);
+  }
+
+  if(!next.firstKey){
+    next.firstKey=macro.key;
+  }
+
+  next.depth=depth+1;
+  return next;
+}
+
+function cpuPlannerStateScore(player,state){
+  const target=victoryTarget(player);
+  const rateTotal=RESOURCES.reduce(
+    (sum,resource)=>
+      sum+(state.rates[resource]||0),
+    0
+  );
+
+  const resourceReserve=RESOURCES.reduce(
+    (sum,resource)=>
+      sum+Math.min(3,state.resources[resource]||0),
+    0
+  );
+
+  if(state.vp>=target){
+    return (
+      20000-
+      state.turns*520+
+      rateTotal*55+
+      state.utility*2
+    );
+  }
+
+  const gap=Math.max(0,target-state.vp);
+
+  /*
+    未探索部分は、生産力が高いほど残りVPを早く取れると近似。
+    勝利までのターンを強く罰するため、見た目の生産力より
+    実際に10点へ近い系列を優先する。
+  */
+  const pointVelocity=
+    Math.max(
+      .10,
+      .10+
+      rateTotal*.13+
+      state.devBuys*.025
+    );
+
+  const tailTurns=
+    gap/pointVelocity;
+
+  return (
+    state.vp*255-
+    (state.turns+tailTurns)*46+
+    rateTotal*72+
+    resourceReserve*2.2+
+    state.utility*1.7
+  );
+}
+
+function cpuLookaheadScores(player,goals){
+  const macros=cpuPlannerMacros(
+    player,
+    goals
+  );
+
+  if(!macros.length){
+    return new Map();
+  }
+
+  const initial={
+    resources:{...player.resources},
+    rates:cpuPlannerInitialRates(player),
+    vp:
+      totalVP(player)+
+      player.dev.filter(card=>card==="vp").length,
+    turns:0,
+    utility:0,
+    roadPieces:player.pieces.road,
+    settlementPieces:player.pieces.settlement,
+    cityPieces:player.pieces.city,
+    settlements:player.settlements.length,
+    cities:player.cities.length,
+    devRemaining:game.devDeck.length,
+    devBuys:0,
+    used:new Set(),
+    firstKey:null,
+    depth:0,
+  };
+
+  const depthLimit=
+    totalVP(player)>=7
+      ?5
+      :4;
+
+  const beamWidth=
+    totalVP(player)>=7
+      ?16
+      :12;
+
+  let beam=[initial];
+  const bestByFirst=new Map();
+
+  for(let depth=0;depth<depthLimit;depth++){
+    const next=[];
+
+    for(const state of beam){
+      for(const macro of macros){
+        if(!cpuPlannerMacroApplicable(state,macro)){
+          continue;
+        }
+
+        const child=
+          cpuPlannerApplyMacro(
+            state,
+            macro,
+            depth
+          );
+
+        const score=
+          cpuPlannerStateScore(
+            player,
+            child
+          );
+
+        child._plannerScore=score;
+        next.push(child);
+
+        if(child.firstKey){
+          const old=
+            bestByFirst.get(child.firstKey);
+          if(old===undefined || score>old){
+            bestByFirst.set(
+              child.firstKey,
+              score
+            );
+          }
+        }
+      }
+    }
+
+    if(!next.length) break;
+
+    next.sort(
+      (a,b)=>
+        b._plannerScore-
+        a._plannerScore
+    );
+
+    beam=next.slice(0,beamWidth);
+  }
+
+  return bestByFirst;
+}
+
+function cpuApplyLookaheadToGoals(player,goals){
+  if(goals.length<=1) return goals;
+
+  const lookahead=
+    cpuLookaheadScores(
+      player,
+      goals
+    );
+
+  if(!lookahead.size){
+    return goals;
+  }
+
+  const available=goals
+    .map(goal=>({
+      key:cpuGoalKey(goal),
+      value:lookahead.get(
+        cpuGoalKey(goal)
+      ),
+    }))
+    .filter(item=>
+      Number.isFinite(item.value)
+    );
+
+  if(!available.length){
+    return goals;
+  }
+
+  const best=Math.max(
+    ...available.map(item=>item.value)
+  );
+
+  const endgame=
+    totalVP(player)>=7;
+
+  return goals.map(goal=>{
+    const value=
+      lookahead.get(
+        cpuGoalKey(goal)
+      );
+
+    if(!Number.isFinite(value)){
+      return {
+        ...goal,
+        lookaheadScore:null,
+        lookaheadBonus:-8,
+        strategicScore:
+          goal.strategicScore-8,
+      };
+    }
+
+    const gap=best-value;
+    const maximumBonus=endgame?68:48;
+    const bonus=Math.max(
+      -12,
+      maximumBonus-
+      gap*(endgame?.115:.095)
+    );
+
+    return {
+      ...goal,
+      lookaheadScore:value,
+      lookaheadBonus:bonus,
+      strategicScore:
+        goal.strategicScore+
+        bonus,
+    };
+  });
+}
+
+function cpuStrategicGoalSignature(player){
+  const boardSignature=game.board.hexes
+    .map(hex=>
+      `${hex.resource}:${hex.number||0}:`+
+      `${hex.lakeNumbers?.join(".")||""}`
+    )
+    .join("|");
+
+  const playersSignature=game.players
+    .map(other=>[
+      other.id,
+      publicVP(other),
+      totalResources(other),
+      other.roads.length,
+      other.settlements.length,
+      other.cities.length,
+      other.knightsPlayed||0,
+      other.hasLongestRoad?1:0,
+      other.hasLargestArmy?1:0,
+    ].join(","))
+    .join(";");
+
+  const resources=RESOURCES
+    .map(resource=>player.resources[resource]||0)
+    .join(",");
+
+  return [
+    game.turnSerial,
+    game.turnNo,
+    game.current,
+    game.phase,
+    game.robberHex??"none",
+    game.devDeck.length,
+    player.id,
+    resources,
+    player.pieces.road,
+    player.pieces.settlement,
+    player.pieces.city,
+    player.roads.join("."),
+    player.settlements.join("."),
+    player.cities.join("."),
+    player.dev.join("."),
+    game.oldBootHolder??"none",
+    playersSignature,
+    boardSignature,
+  ].join("#");
+}
+
+function cpuStrategicGoals(player){
+  const cacheSignature=
+    cpuStrategicGoalSignature(player);
+
+  const cached=
+    cpuStrategicGoalCache.get(player.id);
+
+  if(
+    cached?.signature===cacheSignature
+  ){
+    return cached.goals;
+  }
+
+  const goals=[];
+
+  const points=publicVP(player);
+  const profile=cpuStrategyProfile(player);
+
+  const expansions=
+    player.pieces.settlement>0
+      ?cpuTopExpansionPlans(player,3)
+      :[];
+
+  const cityTargets=
+    player.pieces.city>0
+      ?cpuTopCityTargets(player,3)
+      :[];
+
+  const settlementTargets=
+    player.pieces.settlement>0
+      ?cpuTopSettlementTargets(player,3)
+      :[];
+
+  for(const settlementTarget of settlementTargets){
+    let base=
+      points<=4
+        ?132
+        :points<=6
+          ?122
+          :116;
+
+    if(profile==="expand") base+=4;
+    else if(profile==="city") base-=2;
+
     goals.push({
       kind:"settlement",
       cost:COST.settlement,
       targetId:settlementTarget.id,
       boardScore:settlementTarget.score,
-      base:108,
+      base,
+    });
+  }
+
+  for(const expansion of expansions){
+    if(
+      expansion.roadsNeeded<=0 ||
+      player.pieces.road<=0
+    ){
+      continue;
+    }
+
+    let base=
+      points<=4
+        ?126
+        :points<=6
+          ?111
+          :94;
+
+    if(profile==="expand") base+=5;
+    else if(profile==="city") base-=3;
+
+    goals.push({
+      kind:"road",
+      cost:COST.road,
+      targetId:expansion.nextRoadId,
+      boardScore:expansion.score,
+      expansionTargetId:expansion.targetId,
+      roadsNeeded:expansion.roadsNeeded,
+      contest:expansion.contest,
+      denialBonus:expansion.denialBonus||0,
+      base,
+    });
+  }
+
+  for(const cityTarget of cityTargets){
+    let base=
+      points<=4
+        ?108
+        :points<=7
+          ?128
+          :140;
+
+    if(profile==="city") base+=6;
+    else if(profile==="expand") base-=2;
+
+    goals.push({
+      kind:"city",
+      cost:COST.city,
+      targetId:cityTarget.id,
+      boardScore:cityTarget.score,
+      base,
     });
   }
 
@@ -2483,33 +4345,40 @@ function cpuStrategicGoals(player){
       :null;
 
   if(roadTarget){
-    const noSettlementSite=
-      !settlementTarget;
+    const duplicate=goals.some(goal=>
+      goal.kind==="road" &&
+      goal.targetId===roadTarget.id &&
+      goal.expansionTargetId===
+        (roadTarget.expansionTargetId??null)
+    );
 
-    const longestLeader=
-      Math.max(
+    if(!duplicate){
+      const longestLeader=Math.max(
         ...game.players.map(
           other=>other.longestRoad||0
         )
       );
 
-    const roadRace=
-      (
-        player.longestRoad>=3 &&
-        player.longestRoad>=longestLeader-2
-      )
-        ?16
-        :0;
+      const awardRace=
+        roadTarget.awardGain>0
+          ?46
+          :(
+            player.longestRoad>=3 &&
+            player.longestRoad>=longestLeader-2
+          )
+            ?20
+            :0;
 
-    goals.push({
-      kind:"road",
-      cost:COST.road,
-      targetId:roadTarget.id,
-      boardScore:roadTarget.score,
-      base:
-        (noSettlementSite?82:52)+
-        roadRace,
-    });
+      goals.push({
+        kind:"road",
+        cost:COST.road,
+        targetId:roadTarget.id,
+        boardScore:roadTarget.score,
+        roadAwardPlan:
+          roadTarget.roadAwardPlan||null,
+        base:60+awardRace,
+      });
+    }
   }
 
   if(game.devDeck.length){
@@ -2518,47 +4387,181 @@ function cpuStrategicGoals(player){
         other=>other.hasLargestArmy
       );
 
+    const maximumOpponentKnights=Math.max(
+      0,
+      ...game.players
+        .filter(other=>other.id!==player.id)
+        .map(other=>other.knightsPlayed||0)
+    );
+
     const armyPressure=
       (
-        player.knightsPlayed>=1 ||
+        player.knightsPlayed<=
+        maximumOpponentKnights+1 ||
         !largestArmyHolder
       )
-        ?7
-        :0;
+        ?12
+        :4;
+
+    let base=
+      points<=4
+        ?58
+        :points<=7
+          ?84
+          :102;
+
+    if(profile==="city") base+=3;
 
     goals.push({
       kind:"dev",
       cost:COST.dev,
       targetId:null,
       boardScore:0,
-      base:72+armyPressure,
+      base:base+armyPressure,
     });
   }
 
-  return goals.map(goal=>{
-    const missing=
-      cpuResourceMissingCount(
-        player,
-        goal.cost
-      );
+  let scored=goals.map(goal=>{
+    const missing=cpuResourceMissingCount(
+      player,
+      goal.cost
+    );
+
+    const distance=cpuGoalDistance(
+      player,
+      goal
+    );
+
+    const eta=cpuGoalEta(
+      player,
+      goal
+    );
+
+    const outcomeValue=cpuGoalOutcomeValue(
+      player,
+      goal
+    );
+
+    let contestAdjustment=0;
+
+    if(goal.contest){
+      contestAdjustment+=
+        goal.contest.urgencyBonus*.75-
+        goal.contest.hopelessPenalty*.85+
+        (goal.denialBonus||0)*.75;
+    }
 
     return {
       ...goal,
       missing,
+      distance,
+      eta,
+      outcomeValue,
       strategicScore:
         goal.base+
-        goal.boardScore*1.05-
-        missing*11,
+        goal.boardScore*.68+
+        outcomeValue+
+        contestAdjustment-
+        distance*4.4-
+        eta*7.2,
     };
-  }).sort(
-    (a,b)=>
-      b.strategicScore-
-      a.strategicScore
+  });
+
+  scored=cpuApplyLookaheadToGoals(
+    player,
+    scored
   );
+
+  const result=scored.sort((a,b)=>{
+    if(
+      Math.abs(
+        b.strategicScore-
+        a.strategicScore
+      )>.001
+    ){
+      return (
+        b.strategicScore-
+        a.strategicScore
+      );
+    }
+
+    return String(cpuGoalKey(a)).localeCompare(
+      String(cpuGoalKey(b))
+    );
+  });
+
+  cpuStrategicGoalCache.set(
+    player.id,
+    {
+      signature:cacheSignature,
+      goals:result,
+    }
+  );
+
+  return result;
 }
 
 function cpuChooseGoal(player){
-  return cpuStrategicGoals(player)[0]||null;
+  const goals=
+    cpuStrategicGoals(player);
+
+  if(!goals.length){
+    return null;
+  }
+
+  const best=goals[0];
+
+  /*
+    他プレイヤーの交易受諾判定などでは、
+    勝手にそのCPUの長期計画を書き換えない。
+  */
+  const canPersist=
+    !player.human &&
+    game.current===player.id &&
+    game.phase==="turn";
+
+  if(!canPersist){
+    return best;
+  }
+
+  const persistent=
+    cpuPersistentGoal(
+      player,
+      goals
+    );
+
+  let selected=best;
+
+  if(persistent){
+    /*
+      少し良い程度では目標変更しない。
+      ただし探索層が明確に優位と判断した時は早めに乗り換える。
+    */
+    if(
+      best.strategicScore<
+      persistent.strategicScore+12
+    ){
+      selected=persistent;
+    }
+  }
+
+  const selectedKey=
+    cpuGoalKey(selected);
+
+  if(
+    !player.cpuPlan ||
+    player.cpuPlan.key!==selectedKey
+  ){
+    cpuRememberPlan(
+      player,
+      selected
+    );
+  }else{
+    player.cpuPlan.score=
+      selected.strategicScore||0;
+  }
+
+  return selected;
 }
 
 function cpuResourceKeepValue(
@@ -2575,8 +4578,13 @@ function cpuResourceKeepValue(
       resource
     );
 
+  const selectedPlanCost=
+    selectedGoal?.cost
+      ?cpuGoalPlanCost(selectedGoal)
+      :null;
+
   const goalNeed=
-    selectedGoal?.cost?.[resource]||0;
+    selectedPlanCost?.[resource]||0;
 
   const owned=
     player.resources[resource]||0;
@@ -2728,13 +4736,16 @@ function cpuChooseVictimFromCandidates(
 function cpuGoalMissingResources(player,goal){
   if(!goal?.cost) return [];
 
+  const planCost=
+    cpuGoalPlanCost(goal);
+
   return RESOURCES
     .map(resource=>({
       resource,
       missing:
         Math.max(
           0,
-          (goal.cost[resource]||0)-
+          (planCost[resource]||0)-
           player.resources[resource]
         ),
     }))
@@ -2761,12 +4772,9 @@ function cpuGoalMissingResources(player,goal){
 
 function cpuMonopolyResourceScore(
   player,
-  resource
+  resource,
+  goal=null
 ){
-  /*
-    銀行在庫と自分の所持から、
-    他プレイヤー全体の保有枚数を推定する。
-  */
   const supply=
     expectedResourceSupply();
 
@@ -2778,45 +4786,83 @@ function cpuMonopolyResourceScore(
       (player.resources[resource]||0)
     );
 
-  return (
-    othersTotal*3+
-    cpuResourceKeepValue(
-      player,
-      resource
-    )
+  const selectedGoal=
+    goal||cpuChooseGoal(player);
+
+  const planCost=
+    selectedGoal?.cost
+      ?cpuGoalPlanCost(selectedGoal)
+      :emptyResourceCounts();
+
+  const missing=Math.max(
+    0,
+    (planCost[resource]||0)-
+    (player.resources[resource]||0)
   );
-}
 
-function cpuBestMonopolyResource(player){
-  const resources=[...RESOURCES]
-    .sort(
-      (a,b)=>
-        cpuMonopolyResourceScore(
-          player,
-          b
-        )-
-        cpuMonopolyResourceScore(
-          player,
-          a
-        )
-    );
+  const simulated={
+    ...player.resources,
+    [resource]:
+      (player.resources[resource]||0)+
+      othersTotal,
+  };
 
-  const resource=resources[0];
-  const supply=
-    expectedResourceSupply();
+  const improvement=
+    selectedGoal
+      ?cpuGoalDistance(
+        player,
+        selectedGoal
+      )-
+      cpuGoalDistance(
+        player,
+        selectedGoal,
+        simulated
+      )
+      :0;
 
-  const othersTotal=
-    Math.max(
-      0,
-      supply-
-      (game.bank[resource]||0)-
-      (player.resources[resource]||0)
+  const immediateWin=
+    cpuCanImmediateWinWithResources(
+      player,
+      simulated
     );
 
   return {
     resource,
     othersTotal,
+    improvement,
+    immediateWin,
+    score:
+      othersTotal*3+
+      missing*5.5+
+      improvement*4+
+      (immediateWin?80:0)+
+      cpuResourceKeepValue(
+        player,
+        resource,
+        selectedGoal
+      ),
   };
+}
+
+function cpuBestMonopolyResource(player){
+  const goal=cpuChooseGoal(player);
+
+  const results=RESOURCES.map(resource=>
+    cpuMonopolyResourceScore(
+      player,
+      resource,
+      goal
+    )
+  );
+
+  results.sort((a,b)=>{
+    if(Math.abs(b.score-a.score)>.001){
+      return b.score-a.score;
+    }
+    return a.resource.localeCompare(b.resource);
+  });
+
+  return results[0]||null;
 }
 
 function cpuCanYearOfPlentyHelp(player){
@@ -2836,7 +4882,7 @@ function cpuCanYearOfPlentyHelp(player){
   const missing=
     cpuResourceMissingCount(
       player,
-      goal.cost
+      cpuGoalPlanCost(goal)
     );
 
   return missing>0 && missing<=2;
@@ -3587,7 +5633,7 @@ function robberTargetScore(h,playerId){
   }
 
   return score+
-    Math.random()*.05;
+    cpuStableTie(`robber:${h.id}:${playerId}`)*.02;
 }
 
 function setBuildMode(mode){
@@ -3981,19 +6027,417 @@ function cpuTradeResourceValue(player,resource){
   return Math.max(.55,value);
 }
 
-function cpuAcceptTrade(cpu,give,get){
-  for(const resource of RESOURCES){
-    if(get[resource]>cpu.resources[resource]) return false;
+function cpuCanImmediateWinWithResources(
+  player,
+  resources
+){
+  const needed=
+    victoryTarget(player)-
+    totalVP(player);
+
+  if(needed<=0) return true;
+
+  const canPay=cost=>
+    RESOURCES.every(resource=>
+      (resources[resource]||0)>=
+      (cost[resource]||0)
+    );
+
+  if(needed<=1){
+    if(
+      player.pieces.city>0 &&
+      player.settlements.some(vertexId=>
+        canUpgradeCity(
+          player.id,
+          vertexId
+        )
+      ) &&
+      canPay(COST.city)
+    ){
+      return true;
+    }
+
+    if(
+      player.pieces.settlement>0 &&
+      Object.keys(game.board.vertices)
+        .some(vertexId=>
+          canPlaceSettlement(
+            player.id,
+            vertexId,
+            false
+          )
+        ) &&
+      canPay(COST.settlement)
+    ){
+      return true;
+    }
   }
-  const receivedValue=RESOURCES.reduce(
-    (sum,r)=>sum+give[r]*cpuTradeResourceValue(cpu,r),0
-  );
-  const paidValue=RESOURCES.reduce(
-    (sum,r)=>sum+get[r]*cpuTradeResourceValue(cpu,r),0
-  );
-  if(receivedValue>paidValue*1.08) return true;
-  if(receivedValue>=paidValue*.95) return Math.random()<.55;
+
+  if(
+    needed<=2 &&
+    player.pieces.road>0 &&
+    canPay(COST.road)
+  ){
+    const roadPlan=
+      cpuBestRoadSequence(
+        player,
+        1
+      );
+
+    if(
+      roadPlan?.awardGain>=needed
+    ){
+      return true;
+    }
+  }
+
   return false;
+}
+
+function cpuAcceptTrade(
+  cpu,
+  give,
+  get,
+  proposer=null
+){
+  for(const resource of RESOURCES){
+    if(
+      (get[resource]||0)>
+      cpu.resources[resource]
+    ){
+      return false;
+    }
+  }
+
+  const goal=
+    cpuChooseGoal(cpu);
+
+  const receivedValue=
+    RESOURCES.reduce(
+      (sum,resource)=>
+        sum+
+        (give[resource]||0)*
+        cpuResourceKeepValue(
+          cpu,
+          resource,
+          goal
+        ),
+      0
+    );
+
+  const paidValue=
+    RESOURCES.reduce(
+      (sum,resource)=>
+        sum+
+        (get[resource]||0)*
+        cpuResourceKeepValue(
+          cpu,
+          resource,
+          goal
+        ),
+      0
+    );
+
+  const delta={};
+
+  for(const resource of RESOURCES){
+    delta[resource]=
+      (give[resource]||0)-
+      (get[resource]||0);
+  }
+
+  const simulated=
+    cpuSimulatedResources(
+      cpu,
+      delta
+    );
+
+  const ownImmediateWin=
+    cpuCanImmediateWinWithResources(
+      cpu,
+      simulated
+    );
+
+  const beforeDistance=
+    cpuGoalDistance(
+      cpu,
+      goal
+    );
+
+  const afterDistance=
+    cpuGoalDistance(
+      cpu,
+      goal,
+      simulated
+    );
+
+  const goalImprovement=
+    beforeDistance-
+    afterDistance;
+
+  let leaderTax=0;
+
+  if(proposer && proposer.id!==cpu.id){
+    const proposerPoints=
+      publicVP(proposer);
+    const cpuPoints=
+      publicVP(cpu);
+
+    /*
+      9点の相手とは、自分もこの交換で即勝利できる場合を除き
+      原則交易しない。勝利目前の相手へ最後の1枚を渡す事故を防ぐ。
+    */
+    if(
+      proposerPoints>=9 &&
+      proposerPoints>=cpuPoints &&
+      !ownImmediateWin
+    ){
+      return false;
+    }
+
+    if(
+      proposerPoints>=9 &&
+      proposerPoints>=cpuPoints
+    ){
+      leaderTax=.52;
+    }else if(
+      proposerPoints>=8 &&
+      proposerPoints>cpuPoints
+    ){
+      leaderTax=.30;
+    }else if(
+      proposerPoints>=7 &&
+      proposerPoints>cpuPoints
+    ){
+      leaderTax=.13;
+    }
+  }
+
+  if(
+    goalImprovement>=1.25 &&
+    receivedValue>=
+      paidValue*(.86+leaderTax)
+  ){
+    return true;
+  }
+
+  if(goalImprovement<-.35){
+    return (
+      receivedValue>=
+      paidValue*(1.38+leaderTax)
+    );
+  }
+
+  return (
+    receivedValue>=
+    paidValue*(1.08+leaderTax)
+  );
+}
+
+function cpuTryPlayerTrade(player){
+  if(
+    player.cpuTradeTurnSerial===
+    game.turnSerial
+  ){
+    return false;
+  }
+
+  player.cpuTradeTurnSerial=
+    game.turnSerial;
+
+  const goal=
+    cpuChooseGoal(player);
+
+  if(!goal?.cost){
+    return false;
+  }
+
+  const beforeDistance=
+    cpuGoalDistance(
+      player,
+      goal
+    );
+
+  if(beforeDistance<=0){
+    return false;
+  }
+
+  const wanted=
+    cpuGoalMissingResources(
+      player,
+      goal
+    );
+
+  if(!wanted.length){
+    return false;
+  }
+
+  const candidates=[];
+
+  for(const wantedItem of wanted){
+    const receive=
+      wantedItem.resource;
+
+    for(const give of RESOURCES){
+      if(give===receive) continue;
+
+      const goalNeed=
+        cpuGoalPlanCost(goal)[give]||0;
+
+      const surplus=
+        Math.max(
+          0,
+          player.resources[give]-
+          goalNeed
+        );
+
+      /*
+        まず1:1。
+        十分余っている場合のみ2:1も候補にする。
+      */
+      const offerAmounts=[];
+
+      if(player.resources[give]>=1){
+        offerAmounts.push(1);
+      }
+
+      if(
+        player.resources[give]>=2 &&
+        surplus>=2
+      ){
+        offerAmounts.push(2);
+      }
+
+      for(const offerAmount of offerAmounts){
+        const giveBundle=
+          emptyResourceCounts();
+
+        const getBundle=
+          emptyResourceCounts();
+
+        giveBundle[give]=offerAmount;
+        getBundle[receive]=1;
+
+        const simulated=
+          cpuSimulatedResources(
+            player,
+            {
+              [give]:-offerAmount,
+              [receive]:1,
+            }
+          );
+
+        const afterDistance=
+          cpuGoalDistance(
+            player,
+            goal,
+            simulated
+          );
+
+        const improvement=
+          beforeDistance-
+          afterDistance;
+
+        if(improvement<=.05){
+          continue;
+        }
+
+        for(const target of game.players){
+          if(
+            target.id===player.id ||
+            target.human ||
+            target.resources[receive]<1
+          ){
+            continue;
+          }
+
+          if(
+            !cpuAcceptTrade(
+              target,
+              giveBundle,
+              getBundle,
+              player
+            )
+          ){
+            continue;
+          }
+
+          const targetPoints=
+            publicVP(target);
+
+          const playerPoints=
+            publicVP(player);
+
+          const ownImmediateWin=
+            cpuCanImmediateWinWithResources(
+              player,
+              simulated
+            );
+
+          if(
+            targetPoints>=9 &&
+            targetPoints>=playerPoints &&
+            !ownImmediateWin
+          ){
+            continue;
+          }
+
+          const leaderPenalty=
+            targetPoints>=9 &&
+            targetPoints>=playerPoints
+              ?40
+              :targetPoints>=8 &&
+                targetPoints>playerPoints
+                ?18
+                :targetPoints>=7 &&
+                  targetPoints>playerPoints
+                  ?7
+                  :0;
+
+          candidates.push({
+            target,
+            giveBundle,
+            getBundle,
+            score:
+              improvement*12-
+              offerAmount*1.5-
+              leaderPenalty,
+          });
+        }
+      }
+    }
+  }
+
+  if(!candidates.length){
+    return false;
+  }
+
+  candidates.sort(
+    (a,b)=>b.score-a.score
+  );
+
+  const best=candidates[0];
+
+  const completed=
+    executePlayerTrade(
+      best.target,
+      best.giveBundle,
+      best.getBundle,
+      player,
+      `cpu-trade-${game.turnSerial}-`+
+      `${player.id}-`+
+      `${Date.now()}`
+    );
+
+  if(completed){
+    log(
+      `${player.name}が`+
+      `${best.target.name}と`+
+      "CPU交易を行いました。"
+    );
+  }
+
+  return completed;
 }
 
 function executePlayerTrade(
@@ -4092,7 +6536,12 @@ function submitPlayerTrade(){
     return;
   }
 
-  const cpuWantedToAccept=cpuAcceptTrade(target,give,get);
+  const cpuWantedToAccept=cpuAcceptTrade(
+    target,
+    give,
+    get,
+    player
+  );
   const accepted=cpuWantedToAccept &&
     executePlayerTrade(target,give,get,player);
 
@@ -5040,174 +7489,76 @@ function cpuBuildPhase(p){
   }
 
   /*
-    目標建設を決めてから、
-    その目標を完成させるための銀行・港交易を行う。
+    v1.49:
+    交易・銀行交換・建設がすべて同じ長期目標を参照する。
+    「都市のために交易した直後に道路を建てる」ような
+    目標ブレを抑える。
+  */
+  let goal=
+    cpuChooseGoal(p);
+
+  if(!p.builtThisTurn){
+    cpuTryPlayerTrade(p);
+    goal=cpuChooseGoal(p);
+  }
+
+  /*
+    「何か建てられる」ではなく、
+    「現在の目標を建てられる」まで銀行・港交易を検討する。
   */
   for(
     let attempt=0;
-    attempt<4 &&
-    !p.builtThisTurn;
+    attempt<5 &&
+    !p.builtThisTurn &&
+    goal &&
+    !cpuGoalBuildable(p,goal);
     attempt++
   ){
-    if(cpuHasBuildOption(p)){
-      break;
-    }
-
     if(!cpuTryBankTrade(p)){
       break;
     }
+
+    goal=cpuChooseGoal(p);
   }
 
-  if(!p.builtThisTurn){
-    const plans=[];
+  if(
+    !p.builtThisTurn &&
+    goal &&
+    cpuGoalBuildable(p,goal)
+  ){
+    cpuExecuteGoal(p,goal);
+  }
 
-    if(
-      p.pieces.city>0 &&
-      hasCost(p,COST.city)
-    ){
-      const target=
-        cpuBestCityTarget(p);
+  /*
+    目標資源を崩してまで毎ターン無理に建てない。
+    ただし8枚以上で7の破棄リスクが高い場合だけ、
+    戦略点が近い建設候補へ資源圧縮として逃がす。
+  */
+  if(
+    !p.builtThisTurn &&
+    totalResources(p)>=8
+  ){
+    const goals=
+      cpuStrategicGoals(p);
 
-      if(target){
-        plans.push({
-          kind:"city",
-          targetId:target.id,
-          score:
-            125+
-            target.score*1.35,
-        });
-      }
-    }
+    const primaryScore=
+      goal?.strategicScore??-Infinity;
 
-    if(
-      p.pieces.settlement>0 &&
-      hasCost(
-        p,
-        COST.settlement
-      )
-    ){
-      const target=
-        cpuBestSettlementTarget(p);
-
-      if(target){
-        plans.push({
-          kind:"settlement",
-          targetId:target.id,
-          score:
-            119+
-            target.score*1.4,
-        });
-      }
-    }
-
-    if(
-      p.pieces.road>0 &&
-      hasCost(p,COST.road)
-    ){
-      const target=
-        cpuBestRoadTarget(p);
-
-      if(target){
-        const noSettlementSite=
-          !cpuBestSettlementTarget(p);
-
-        plans.push({
-          kind:"road",
-          targetId:target.id,
-          score:
-            (
-              noSettlementSite
-                ?105
-                :72
-            )+
-            target.score*1.1,
-        });
-      }
-    }
-
-    if(
-      game.devDeck.length &&
-      hasCost(p,COST.dev)
-    ){
-      const maximumOpponentKnights=
-        Math.max(
-          0,
-          ...game.players
-            .filter(
-              other=>other.id!==p.id
-            )
-            .map(
-              other=>
-                other.knightsPlayed||0
-            )
-        );
-
-      const armyInterest=
-        p.knightsPlayed<=
-        maximumOpponentKnights+1
-          ?12
-          :4;
-
-      plans.push({
-        kind:"dev",
-        targetId:null,
-        score:82+armyInterest,
-      });
-    }
-
-    plans.sort(
-      (a,b)=>b.score-a.score
-    );
-
-    const plan=plans[0];
-
-    if(plan){
-      if(plan.kind==="city"){
-        placeCity(
-          p.id,
-          plan.targetId
-        );
-
-        p.builtThisTurn=true;
-
-        log(
-          `${p.name}が都市を建てました。`
-        );
-      }else if(
-        plan.kind==="settlement"
-      ){
-        payCost(
+    const emergency=
+      goals.find(candidate=>
+        cpuGoalBuildable(
           p,
-          COST.settlement,
-          "開拓地建設"
-        );
+          candidate
+        ) &&
+        candidate.strategicScore>=
+          primaryScore-18
+      );
 
-        placeSettlement(
-          p.id,
-          plan.targetId,
-          false
-        );
-
-        p.builtThisTurn=true;
-
-        log(
-          `${p.name}が開拓地を建てました。`
-        );
-      }else if(plan.kind==="road"){
-        placeRoad(
-          p.id,
-          plan.targetId,
-          false
-        );
-
-        p.builtThisTurn=true;
-
-        log(
-          `${p.name}が街道を建てました。`
-        );
-      }else if(plan.kind==="dev"){
-        buyDev(p.id);
-      }
+    if(emergency){
+      cpuExecuteGoal(
+        p,
+        emergency
+      );
     }
   }
 
@@ -5249,134 +7600,137 @@ function cpuHasBuildOption(p){
 }
 
 function cpuTryBankTrade(p){
-  const goal=cpuChooseGoal(p);
+  const goal=
+    cpuChooseGoal(p);
 
   if(!goal?.cost) return false;
 
-  const missing=
-    cpuGoalMissingResources(
+  const beforeDistance=
+    cpuGoalDistance(
       p,
       goal
     );
 
-  if(!missing.length){
-    return false;
-  }
+  const candidates=[];
 
-  const receiveResource=
-    missing.find(
-      item=>
-        game.bank[item.resource]>0
-    )?.resource;
+  for(const receiveResource of RESOURCES){
+    if(
+      game.bank[receiveResource]<1
+    ){
+      continue;
+    }
 
-  if(!receiveResource){
-    return false;
-  }
+    for(const giveResource of RESOURCES){
+      if(
+        giveResource===
+        receiveResource
+      ){
+        continue;
+      }
 
-  const giveCandidates=
-    RESOURCES
-      .filter(resource=>{
-        if(resource===receiveResource){
-          return false;
-        }
-
-        const rate=
-          getTradeRate(
-            p,
-            resource
-          );
-
-        if(
-          p.resources[resource]<
-          rate
-        ){
-          return false;
-        }
-
-        const goalNeed=
-          goal.cost[resource]||0;
-
-        const surplus=
-          p.resources[resource]-
-          goalNeed;
-
-        /*
-          原則として目標建設に必要な資源は
-          崩さず、余剰から交易する。
-        */
-        return surplus>=rate;
-      })
-      .sort((a,b)=>{
-        const rateA=
-          getTradeRate(p,a);
-
-        const rateB=
-          getTradeRate(p,b);
-
-        if(rateA!==rateB){
-          return rateA-rateB;
-        }
-
-        const keepA=
-          cpuResourceKeepValue(
-            p,
-            a,
-            goal
-          );
-
-        const keepB=
-          cpuResourceKeepValue(
-            p,
-            b,
-            goal
-          );
-
-        if(
-          Math.abs(
-            keepA-keepB
-          )>.001
-        ){
-          return keepA-keepB;
-        }
-
-        return (
-          p.resources[b]-
-          p.resources[a]
+      const rate=
+        getTradeRate(
+          p,
+          giveResource
         );
+
+      if(
+        p.resources[giveResource]<
+        rate
+      ){
+        continue;
+      }
+
+      const simulated=
+        cpuSimulatedResources(
+          p,
+          {
+            [giveResource]:-rate,
+            [receiveResource]:1,
+          }
+        );
+
+      const afterDistance=
+        cpuGoalDistance(
+          p,
+          goal,
+          simulated
+        );
+
+      const improvement=
+        beforeDistance-
+        afterDistance;
+
+      /*
+        7で半減する危険が高い時は、
+        ほぼ等価でも手札圧縮を少し評価する。
+      */
+      const sevenRiskBonus=
+        totalResources(p)>=8
+          ?0.45
+          :0;
+
+      const score=
+        improvement+
+        sevenRiskBonus-
+        rate*.04;
+
+      if(score<=.08){
+        continue;
+      }
+
+      candidates.push({
+        giveResource,
+        receiveResource,
+        rate,
+        score,
       });
+    }
+  }
 
-  const giveResource=
-    giveCandidates[0];
-
-  if(!giveResource){
+  if(!candidates.length){
     return false;
   }
 
-  const rate=
-    getTradeRate(
-      p,
-      giveResource
-    );
+  candidates.sort(
+    (a,b)=>b.score-a.score
+  );
 
-  p.resources[giveResource]-=rate;
-  game.bank[giveResource]+=rate;
+  const best=candidates[0];
 
-  p.resources[receiveResource]++;
-  game.bank[receiveResource]--;
+  p.resources[
+    best.giveResource
+  ]-=best.rate;
+
+  game.bank[
+    best.giveResource
+  ]+=best.rate;
+
+  p.resources[
+    best.receiveResource
+  ]++;
+
+  game.bank[
+    best.receiveResource
+  ]--;
 
   showResourceDelta(
     p.id,
     {
-      [giveResource]:-rate,
-      [receiveResource]:1,
+      [best.giveResource]:
+        -best.rate,
+      [best.receiveResource]:
+        1,
     },
     "銀行・港交易"
   );
 
   log(
     `${p.name}が`+
-    `${RESOURCE_JA[giveResource]}${rate}枚を`+
-    `${RESOURCE_JA[receiveResource]}1枚へ交易しました。`
+    `${RESOURCE_JA[best.giveResource]}`+
+    `${best.rate}枚を`+
+    `${RESOURCE_JA[best.receiveResource]}`+
+    "1枚へ交易しました。"
   );
 
   return true;
@@ -5409,22 +7763,27 @@ function cpuPlayYearOfPlenty(p){
   };
 
   for(let draw=0;draw<2;draw++){
-    const missing=
+    const planCost=
       goal?.cost
+        ?cpuGoalPlanCost(goal)
+        :null;
+
+    const missing=
+      planCost
         ?RESOURCES
           .filter(resource=>
             game.bank[resource]>0 &&
             simulated[resource]<
-              (goal.cost[resource]||0)
+              (planCost[resource]||0)
           )
           .sort(
             (a,b)=>
               (
-                (goal.cost[b]||0)-
+                (planCost[b]||0)-
                 simulated[b]
               )-
               (
-                (goal.cost[a]||0)-
+                (planCost[a]||0)-
                 simulated[a]
               )
           )
@@ -5532,7 +7891,14 @@ function cpuPlayMonopoly(p){
       ?2
       :3;
 
-  if(best.othersTotal<threshold){
+  if(
+    best.othersTotal<threshold &&
+    !best.immediateWin &&
+    !(
+      publicVP(p)>=8 &&
+      best.improvement>=1.4
+    )
+  ){
     return false;
   }
 
@@ -5704,6 +8070,17 @@ function cpuUseStrategicDevelopment(p){
   */
   const goal=cpuChooseGoal(p);
 
+  const roadBuildingPlan=
+    usableDevCount(
+      p,
+      "roadBuilding"
+    )>0
+      ?cpuBestRoadSequence(
+        p,
+        Math.min(2,p.pieces.road)
+      )
+      :null;
+
   if(
     usableDevCount(
       p,
@@ -5711,7 +8088,12 @@ function cpuUseStrategicDevelopment(p){
     )>0 &&
     (
       goal?.kind==="road" ||
-      !cpuBestSettlementTarget(p)
+      roadBuildingPlan?.awardGain>0 ||
+      roadBuildingPlan?.immediateWin ||
+      (
+        !cpuBestSettlementTarget(p) &&
+        roadBuildingPlan?.sequence?.length
+      )
     )
   ){
     cpuPlayRoadBuilding(p);
@@ -5782,7 +8164,135 @@ function futureVertexScore(
   );
 }
 
+function cpuSetupPairPotential(
+  playerId,
+  firstVertexId
+){
+  const player=playerById(playerId);
+
+  if(
+    !player ||
+    player.settlements.length>0
+  ){
+    return 0;
+  }
+
+  const firstVertex=
+    game.board.vertices[firstVertexId];
+
+  if(!firstVertex) return 0;
+
+  const firstResources=new Set();
+  const firstNumbers=new Set();
+
+  for(const hexId of firstVertex.hexes){
+    const hex=game.board.hexes[hexId];
+    if(!hex) continue;
+    if(RESOURCES.includes(hex.resource)){
+      firstResources.add(hex.resource);
+    }
+    if(hex.number){
+      firstNumbers.add(hex.number);
+    }
+  }
+
+  let bestSecond=-9999;
+
+  for(const secondId of Object.keys(game.board.vertices)){
+    if(secondId===firstVertexId) continue;
+
+    if(
+      vertexNeighbors(firstVertexId)
+        .includes(secondId)
+    ){
+      continue;
+    }
+
+    if(
+      !canPlaceSettlement(
+        playerId,
+        secondId,
+        true
+      )
+    ){
+      continue;
+    }
+
+    const secondVertex=
+      game.board.vertices[secondId];
+
+    let score=
+      cpuVertexStrategicScore(
+        secondId,
+        playerId,
+        {setup:true}
+      );
+
+    const combinedResources=
+      new Set(firstResources);
+
+    let overlapNumbers=0;
+
+    for(const hexId of secondVertex.hexes){
+      const hex=game.board.hexes[hexId];
+      if(!hex) continue;
+
+      if(RESOURCES.includes(hex.resource)){
+        combinedResources.add(hex.resource);
+      }
+
+      if(
+        hex.number &&
+        firstNumbers.has(hex.number)
+      ){
+        overlapNumbers++;
+      }
+    }
+
+    score+=
+      combinedResources.size*1.8;
+
+    if(
+      combinedResources.has("grain") &&
+      combinedResources.has("ore")
+    ){
+      score+=4.5;
+    }
+
+    if(
+      combinedResources.has("wood") &&
+      combinedResources.has("brick")
+    ){
+      score+=3.7;
+    }
+
+    if(combinedResources.size===5){
+      score+=6.5;
+    }
+
+    score-=overlapNumbers*1.7;
+
+    bestSecond=
+      Math.max(
+        bestSecond,
+        score
+      );
+  }
+
+  if(bestSecond<=-9000){
+    return 0;
+  }
+
+  /*
+    1軒目単体の価値を主役にしつつ、
+    2軒セットとして強い初期配置を選びやすくする。
+  */
+  return bestSecond*.34;
+}
+
 function bestSetupVertex(playerId){
+  const player=playerById(playerId);
+
   const candidates=
     Object.keys(game.board.vertices)
       .filter(vertexId=>
@@ -5794,15 +8304,37 @@ function bestSetupVertex(playerId){
       );
 
   candidates.sort(
-    (a,b)=>
-      setupVertexScore(
-        b,
-        playerId
-      )-
-      setupVertexScore(
-        a,
-        playerId
-      )
+    (a,b)=>{
+      const scoreA=
+        setupVertexScore(
+          a,
+          playerId
+        )+
+        (
+          player?.settlements.length===0
+            ?cpuSetupPairPotential(
+              playerId,
+              a
+            )
+            :0
+        );
+
+      const scoreB=
+        setupVertexScore(
+          b,
+          playerId
+        )+
+        (
+          player?.settlements.length===0
+            ?cpuSetupPairPotential(
+              playerId,
+              b
+            )
+            :0
+        );
+
+      return scoreB-scoreA;
+    }
   );
 
   return candidates[0];
@@ -5984,12 +8516,308 @@ function roadExpansionScore(
     score+=5.5;
   }
 
-  score+=Math.random()*.08;
+  score+=cpuStableTie(`road:${edgeId}:${playerId}`)*.025;
 
   return score;
 }
 
+function cpuBestRoadSequence(player,maxDepth=4){
+  if(
+    !player ||
+    maxDepth<=0 ||
+    player.pieces.road<=0
+  ){
+    return null;
+  }
+
+  const effectiveDepth=Math.min(
+    maxDepth,
+    totalVP(player)>=7 ? 4 : 3
+  );
+
+  const roadStateSignature=[
+    game.turnSerial,
+    game.current,
+    player.id,
+    effectiveDepth,
+    player.pieces.road,
+    totalVP(player),
+    victoryTarget(player),
+    game.oldBootHolder??"none",
+    ...game.players.map(other=>
+      [
+        other.id,
+        other.roads.join("."),
+        other.settlements.join("."),
+        other.cities.join("."),
+        other.hasLongestRoad?1:0,
+      ].join(":")
+    ),
+  ].join("#");
+
+  const cacheKey=
+    `${player.id}:${effectiveDepth}`;
+
+  const cached=
+    cpuRoadSequenceCache.get(cacheKey);
+
+  if(cached?.signature===roadStateSignature){
+    return cached.value;
+  }
+
+  const opponentMaximum=Math.max(
+    0,
+    ...game.players
+      .filter(other=>other.id!==player.id)
+      .map(other=>other.longestRoad||0)
+  );
+
+  const currentHolder=
+    game.players.find(
+      other=>other.hasLongestRoad
+    )||null;
+
+  const limit=Math.min(
+    effectiveDepth,
+    player.pieces.road,
+    4
+  );
+
+  let best=null;
+
+  function inspect(sequence){
+    if(!sequence.length) return;
+
+    const projected=
+      calculateLongestRoad(player.id);
+
+    const wouldHold=
+      projected>=5 &&
+      (
+        currentHolder?.id===player.id
+          ?projected>=opponentMaximum
+          :projected>opponentMaximum
+      );
+
+    const awardGain=
+      wouldHold &&
+      !player.hasLongestRoad
+        ?2
+        :0;
+
+    const immediateWin=
+      awardGain>0 &&
+      totalVP(player)+awardGain>=
+        victoryTarget(player);
+
+    const defenseValue=
+      player.hasLongestRoad
+        ?Math.max(
+          0,
+          projected-opponentMaximum
+        )*8
+        :0;
+
+    const score=
+      (immediateWin?1200:0)+
+      awardGain*240+
+      (wouldHold?42:0)+
+      projected*13+
+      defenseValue-
+      sequence.length*18;
+
+    if(
+      !best ||
+      score>best.score+.001 ||
+      (
+        Math.abs(score-best.score)<=.001 &&
+        sequence.length<best.sequence.length
+      )
+    ){
+      best={
+        sequence:[...sequence],
+        projectedLongest:projected,
+        wouldHold,
+        awardGain,
+        immediateWin,
+        score,
+      };
+    }
+  }
+
+  function dfs(sequence,depth){
+    inspect(sequence);
+
+    if(depth>=limit) return;
+
+    let candidates=
+      Object.keys(game.board.edges)
+        .filter(edgeId=>
+          canPlaceRoad(
+            player.id,
+            edgeId
+          )
+        )
+        .map(edgeId=>{
+          const edge=game.board.edges[edgeId];
+          edge.road=player.id;
+          player.roads.push(edgeId);
+
+          let projected=0;
+          try{
+            projected=
+              calculateLongestRoad(player.id);
+          }finally{
+            player.roads.pop();
+            edge.road=null;
+          }
+
+          const wouldHold=
+            projected>=5 &&
+            (
+              currentHolder?.id===player.id
+                ?projected>=opponentMaximum
+                :projected>opponentMaximum
+            );
+
+          const expansionValue=
+            roadExpansionScore(
+              edgeId,
+              player.id
+            );
+
+          return {
+            edgeId,
+            projected,
+            searchScore:
+              projected*36+
+              (wouldHold?220:0)+
+              expansionValue*.42,
+          };
+        });
+
+    candidates.sort((a,b)=>{
+      if(
+        Math.abs(
+          b.searchScore-
+          a.searchScore
+        )>.001
+      ){
+        return b.searchScore-a.searchScore;
+      }
+
+      return String(a.edgeId).localeCompare(
+        String(b.edgeId)
+      );
+    });
+
+    /*
+      道路だけは組合せが爆発しやすいので、各深さで上位6枝。
+      最長交易路の伸びを先に見て枝刈りするため、
+      単なる開拓向け道路に偏らない。
+    */
+    candidates=candidates.slice(0,6);
+
+    for(const candidate of candidates){
+      const edgeId=candidate.edgeId;
+      const edge=game.board.edges[edgeId];
+      if(!edge || edge.road!==null) continue;
+
+      edge.road=player.id;
+      player.roads.push(edgeId);
+
+      try{
+        dfs(
+          [...sequence,edgeId],
+          depth+1
+        );
+      }finally{
+        player.roads.pop();
+        edge.road=null;
+      }
+    }
+  }
+
+  dfs([],0);
+
+  cpuRoadSequenceCache.set(
+    cacheKey,
+    {
+      signature:roadStateSignature,
+      value:best,
+    }
+  );
+
+  return best;
+}
+
 function cpuBestRoadTarget(player){
+  const awardPlan=
+    cpuBestRoadSequence(
+      player,
+      Math.min(4,player.pieces.road)
+    );
+
+  /*
+    勝利、または2手以内で最長交易路を取れるなら
+    開拓用道路より先に検討する。
+  */
+  if(
+    awardPlan?.sequence?.length &&
+    awardPlan.awardGain>0 &&
+    (
+      awardPlan.immediateWin ||
+      awardPlan.sequence.length<=2 ||
+      totalVP(player)>=7
+    )
+  ){
+    return {
+      id:awardPlan.sequence[0],
+      score:
+        90+
+        awardPlan.score,
+      awardGain:awardPlan.awardGain,
+      roadAwardPlan:awardPlan,
+    };
+  }
+
+  const expansion=
+    cpuBestExpansionPlan(player);
+
+  if(
+    expansion?.nextRoadId &&
+    canPlaceRoad(
+      player.id,
+      expansion.nextRoadId
+    )
+  ){
+    return {
+      id:expansion.nextRoadId,
+      score:
+        26+
+        expansion.score-
+        expansion.roadsNeeded*1.5,
+      expansionTargetId:
+        expansion.targetId,
+      awardGain:0,
+    };
+  }
+
+  if(
+    awardPlan?.sequence?.length &&
+    awardPlan.projectedLongest>
+      (player.longestRoad||0)
+  ){
+    return {
+      id:awardPlan.sequence[0],
+      score:
+        30+
+        awardPlan.score*.42,
+      awardGain:awardPlan.awardGain||0,
+      roadAwardPlan:awardPlan,
+    };
+  }
+
   const candidates=
     Object.keys(game.board.edges)
       .filter(edgeId=>
@@ -6001,8 +8829,8 @@ function cpuBestRoadTarget(player){
 
   if(!candidates.length) return null;
 
-  candidates.sort(
-    (a,b)=>
+  candidates.sort((a,b)=>{
+    const diff=
       roadExpansionScore(
         b,
         player.id
@@ -6010,8 +8838,14 @@ function cpuBestRoadTarget(player){
       roadExpansionScore(
         a,
         player.id
-      )
-  );
+      );
+
+    if(Math.abs(diff)>.001){
+      return diff;
+    }
+
+    return String(a).localeCompare(String(b));
+  });
 
   return {
     id:candidates[0],
@@ -6020,6 +8854,7 @@ function cpuBestRoadTarget(player){
         candidates[0],
         player.id
       ),
+    awardGain:0,
   };
 }
 
@@ -7153,7 +9988,13 @@ let mobileGameView="board";
 
 const MOBILE_BOARD_CROP = {
   xStart:1,
-  xEnd:19,
+
+  /*
+    右端の港枠まで表示するため、
+    スマホ版は右側だけ切り抜かない。
+  */
+  xEnd:20,
+
   yStart:3,
   yEnd:17,
   divisions:20,
@@ -7184,7 +10025,7 @@ function shouldCropMobileBoard(){
 function applyMobileBoardCrop(){
   /*
     縦持ちタブレットはスマホ式タブUIを使うが、
-    スマホ向けのX1-X19・Y3-Y17切り取りは適用しない。
+    スマホ向けのX1-X20・Y3-Y17切り取りは適用しない。
   */
   const shouldCrop=shouldCropMobileBoard();
 

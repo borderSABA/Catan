@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.45";
+const APP_VERSION = "v1.49";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -260,7 +260,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室するROOMを選択してください。現在の版：v1.45");
+    showOnlineMessage("入室するROOMを選択してください。現在の版：v1.49");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }

@@ -5039,3 +5039,75 @@ body.desktop-1080-fit
     display: none !important;
   }
 }
+
+
+/* v1.45：オンラインボドゲ共通化 実装規格v4 ROOM配置 */
+.room-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.room-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.room-card-title {
+  margin: 0;
+}
+
+.room-card-state {
+  margin-top: 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  white-space: nowrap;
+  font-weight: 900;
+}
+
+.room-card.playing .room-card-state {
+  background: #fed7aa;
+  color: #9a3412;
+}
+
+.room-card-players {
+  min-height: 38px;
+  margin-top: 7px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .room-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .room-card {
+    min-width: 0;
+    padding: 10px;
+  }
+
+  .room-card-title {
+    font-size: 17px;
+  }
+
+  .room-card-state {
+    padding: 2px 5px;
+    font-size: 10px;
+  }
+
+  .room-card-count,
+  .room-card-players {
+    font-size: 11px;
+  }
+
+  .room-card-actions {
+    grid-template-columns: 1fr;
+  }
+}

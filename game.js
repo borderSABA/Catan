@@ -24,6 +24,10 @@ let game = null;
 let cpuTimer = null;
 let cpuActionRunning = false;
 let cpuScheduledKey = null;
+
+let cpuDiscardTimer = null;
+let cpuDiscardScheduledKey = null;
+
 let discardQueue = [];
 let discardSelection = null;
 let choiceModalState = null;
@@ -981,6 +985,10 @@ function newGame(){
   cpuTimer=null;
   cpuActionRunning=false;
   cpuScheduledKey=null;
+
+  clearTimeout(cpuDiscardTimer);
+  cpuDiscardTimer=null;
+  cpuDiscardScheduledKey=null;
   shownAwardEventIds.clear();
   shownResourcePopEventIds.clear();
   shownTurnAnnouncementEventIds.clear();
@@ -2113,16 +2121,967 @@ function hideDiscardModal(){
   if(modal) modal.classList.add("hidden");
 }
 
-function cpuDiscardHalf(player,need){
-  const removed={};
-  let left=need;
-  while(left>0){
-    const r=[...RESOURCES].sort((a,b)=>player.resources[b]-player.resources[a])[0];
-    player.resources[r]--; game.bank[r]++;
-    removed[r]=(removed[r]||0)-1; left--;
+function cpuBuildingMultiplier(building){
+  return building?.type==="city" ? 2 : 1;
+}
+
+function cpuResourceProduction(player,resource){
+  if(!player || !game?.board) return 0;
+
+  let score=0;
+
+  const vertices=[
+    ...player.settlements,
+    ...player.cities,
+  ];
+
+  for(const vertexId of vertices){
+    const building=
+      game.board.vertices[vertexId]?.building;
+
+    const multiplier=
+      cpuBuildingMultiplier(building);
+
+    for(const hexId of game.board.vertices[vertexId]?.hexes||[]){
+      const hex=game.board.hexes[hexId];
+
+      if(
+        !hex ||
+        hex.resource!==resource
+      ){
+        continue;
+      }
+
+      if(hex.number){
+        score +=
+          (PIPS[hex.number]||0)*
+          multiplier;
+      }
+    }
   }
-  showResourceDelta(player.id,{unknown:-need},"7の破棄");
-  log(`${player.name}は資源を${need}枚捨てました。`);
+
+  return score;
+}
+
+function cpuProductionResources(player){
+  const result={};
+
+  for(const resource of RESOURCES){
+    result[resource]=
+      cpuResourceProduction(
+        player,
+        resource
+      );
+  }
+
+  return result;
+}
+
+function cpuVertexHarborBonus(vertexId,playerId){
+  const vertex=game.board.vertices[vertexId];
+  if(!vertex) return 0;
+
+  const player=playerById(playerId);
+  const production=
+    player
+      ?cpuProductionResources(player)
+      :Object.fromEntries(
+        RESOURCES.map(resource=>[resource,0])
+      );
+
+  let best=0;
+
+  for(const edgeId of vertex.edges){
+    const harbor=
+      game.board.edges[edgeId]?.harbor;
+
+    if(!harbor) continue;
+
+    if(harbor==="3:1"){
+      best=Math.max(best,1.8);
+      continue;
+    }
+
+    const matchingProduction=
+      production[harbor]||0;
+
+    best=Math.max(
+      best,
+      2.4+
+      Math.min(2.4,matchingProduction*.35)
+    );
+  }
+
+  return best;
+}
+
+function cpuVertexStrategicScore(
+  vertexId,
+  playerId,
+  options={}
+){
+  const vertex=
+    game.board.vertices[vertexId];
+
+  if(!vertex) return -9999;
+
+  const player=playerById(playerId);
+  const setup=!!options.setup;
+
+  let score=0;
+  const resourceSet=new Set();
+  const numberSet=new Set();
+
+  const existingProduction=
+    player
+      ?cpuProductionResources(player)
+      :Object.fromEntries(
+        RESOURCES.map(resource=>[resource,0])
+      );
+
+  const resourceWeights={
+    wood:1.08,
+    brick:1.12,
+    wool:.96,
+    grain:1.18,
+    ore:1.16,
+  };
+
+  for(const hexId of vertex.hexes){
+    const hex=game.board.hexes[hexId];
+    if(!hex) continue;
+
+    let pips=0;
+
+    if(hex.number){
+      pips=PIPS[hex.number]||0;
+      numberSet.add(hex.number);
+    }else if(
+      hex.resource==="lake" &&
+      Array.isArray(hex.lakeNumbers)
+    ){
+      pips=
+        hex.lakeNumbers.reduce(
+          (sum,number)=>
+            sum+(PIPS[number]||0),
+          0
+        )*.42;
+    }
+
+    if(RESOURCES.includes(hex.resource)){
+      const resource=hex.resource;
+      resourceSet.add(resource);
+
+      score +=
+        pips*
+        resourceWeights[resource];
+
+      if(
+        player &&
+        existingProduction[resource]<=0
+      ){
+        score +=
+          setup &&
+          player.settlements.length>=1
+            ?3.4
+            :2.1;
+      }
+
+      if(
+        setup &&
+        player?.settlements.length===0 &&
+        (
+          resource==="wood" ||
+          resource==="brick" ||
+          resource==="grain"
+        )
+      ){
+        score += .8;
+      }
+    }else{
+      score += pips*.6;
+    }
+  }
+
+  score += resourceSet.size*2.25;
+  score += numberSet.size*.55;
+  score += cpuVertexHarborBonus(
+    vertexId,
+    playerId
+  );
+
+  if(
+    game.fishermen &&
+    isFishingVertex(vertexId)
+  ){
+    score += 2.4;
+  }
+
+  /*
+    同点付近だけわずかな揺らぎを持たせ、
+    毎回完全に同じ初期配置にはしない。
+  */
+  score += Math.random()*.12;
+
+  return score;
+}
+
+function cpuCityTargetScore(vertexId,playerId){
+  const vertex=game.board.vertices[vertexId];
+  if(!vertex) return -9999;
+
+  const production=
+    vertexProductionScore(vertexId);
+
+  let score=
+    production*1.65+
+    cpuVertexStrategicScore(
+      vertexId,
+      playerId
+    )*.55;
+
+  for(const hexId of vertex.hexes){
+    const resource=
+      game.board.hexes[hexId]?.resource;
+
+    if(resource==="grain"){
+      score+=1.15;
+    }
+
+    if(resource==="ore"){
+      score+=1.25;
+    }
+  }
+
+  return score;
+}
+
+function cpuBestSettlementTarget(player){
+  const candidates=
+    Object.keys(game.board.vertices)
+      .filter(vertexId=>
+        canPlaceSettlement(
+          player.id,
+          vertexId,
+          false
+        )
+      );
+
+  if(!candidates.length) return null;
+
+  candidates.sort(
+    (a,b)=>
+      cpuVertexStrategicScore(
+        b,
+        player.id
+      )-
+      cpuVertexStrategicScore(
+        a,
+        player.id
+      )
+  );
+
+  return {
+    id:candidates[0],
+    score:
+      cpuVertexStrategicScore(
+        candidates[0],
+        player.id
+      ),
+  };
+}
+
+function cpuBestCityTarget(player){
+  if(!player.settlements.length){
+    return null;
+  }
+
+  const candidates=
+    [...player.settlements]
+      .filter(vertexId=>
+        canUpgradeCity(
+          player.id,
+          vertexId
+        )
+      );
+
+  if(!candidates.length) return null;
+
+  candidates.sort(
+    (a,b)=>
+      cpuCityTargetScore(
+        b,
+        player.id
+      )-
+      cpuCityTargetScore(
+        a,
+        player.id
+      )
+  );
+
+  return {
+    id:candidates[0],
+    score:
+      cpuCityTargetScore(
+        candidates[0],
+        player.id
+      ),
+  };
+}
+
+function cpuResourceMissingCount(player,cost){
+  if(!cost) return 0;
+
+  return RESOURCES.reduce(
+    (sum,resource)=>
+      sum+
+      Math.max(
+        0,
+        (cost[resource]||0)-
+        (player.resources[resource]||0)
+      ),
+    0
+  );
+}
+
+function cpuStrategicGoals(player){
+  const goals=[];
+
+  const cityTarget=
+    player.pieces.city>0
+      ?cpuBestCityTarget(player)
+      :null;
+
+  if(cityTarget){
+    goals.push({
+      kind:"city",
+      cost:COST.city,
+      targetId:cityTarget.id,
+      boardScore:cityTarget.score,
+      base:111,
+    });
+  }
+
+  const settlementTarget=
+    player.pieces.settlement>0
+      ?cpuBestSettlementTarget(player)
+      :null;
+
+  if(settlementTarget){
+    goals.push({
+      kind:"settlement",
+      cost:COST.settlement,
+      targetId:settlementTarget.id,
+      boardScore:settlementTarget.score,
+      base:108,
+    });
+  }
+
+  const roadTarget=
+    player.pieces.road>0
+      ?cpuBestRoadTarget(player)
+      :null;
+
+  if(roadTarget){
+    const noSettlementSite=
+      !settlementTarget;
+
+    const longestLeader=
+      Math.max(
+        ...game.players.map(
+          other=>other.longestRoad||0
+        )
+      );
+
+    const roadRace=
+      (
+        player.longestRoad>=3 &&
+        player.longestRoad>=longestLeader-2
+      )
+        ?16
+        :0;
+
+    goals.push({
+      kind:"road",
+      cost:COST.road,
+      targetId:roadTarget.id,
+      boardScore:roadTarget.score,
+      base:
+        (noSettlementSite?82:52)+
+        roadRace,
+    });
+  }
+
+  if(game.devDeck.length){
+    const largestArmyHolder=
+      game.players.find(
+        other=>other.hasLargestArmy
+      );
+
+    const armyPressure=
+      (
+        player.knightsPlayed>=1 ||
+        !largestArmyHolder
+      )
+        ?7
+        :0;
+
+    goals.push({
+      kind:"dev",
+      cost:COST.dev,
+      targetId:null,
+      boardScore:0,
+      base:72+armyPressure,
+    });
+  }
+
+  return goals.map(goal=>{
+    const missing=
+      cpuResourceMissingCount(
+        player,
+        goal.cost
+      );
+
+    return {
+      ...goal,
+      missing,
+      strategicScore:
+        goal.base+
+        goal.boardScore*1.05-
+        missing*11,
+    };
+  }).sort(
+    (a,b)=>
+      b.strategicScore-
+      a.strategicScore
+  );
+}
+
+function cpuChooseGoal(player){
+  return cpuStrategicGoals(player)[0]||null;
+}
+
+function cpuResourceKeepValue(
+  player,
+  resource,
+  goal=null
+){
+  const selectedGoal=
+    goal||cpuChooseGoal(player);
+
+  const production=
+    cpuResourceProduction(
+      player,
+      resource
+    );
+
+  const goalNeed=
+    selectedGoal?.cost?.[resource]||0;
+
+  const owned=
+    player.resources[resource]||0;
+
+  let value=1;
+
+  if(production<=0){
+    value+=2.7;
+  }else if(production<=2){
+    value+=1.45;
+  }else if(production>=6){
+    value-=.45;
+  }
+
+  if(goalNeed>0){
+    if(owned<=goalNeed){
+      value+=5.1;
+    }else if(owned===goalNeed+1){
+      value+=2.2;
+    }
+  }
+
+  if(resource==="grain"){
+    value+=1.05;
+  }else if(resource==="ore"){
+    value+=
+      player.settlements.length>=2
+        ?1.15
+        :.45;
+  }else if(
+    resource==="wood" ||
+    resource==="brick"
+  ){
+    if(player.pieces.settlement>0){
+      value+=.65;
+    }
+  }
+
+  const excess=
+    Math.max(
+      0,
+      owned-goalNeed-1
+    );
+
+  value-=Math.min(2.4,excess*.48);
+
+  const tradeRate=
+    getTradeRate(
+      player,
+      resource
+    );
+
+  if(
+    owned>=tradeRate &&
+    excess>=tradeRate
+  ){
+    value-=.5;
+  }
+
+  return value;
+}
+
+function cpuChooseDiscardResource(player){
+  const goal=cpuChooseGoal(player);
+
+  const candidates=
+    RESOURCES.filter(
+      resource=>
+        player.resources[resource]>0
+    );
+
+  if(!candidates.length){
+    return null;
+  }
+
+  candidates.sort((a,b)=>{
+    const valueDifference=
+      cpuResourceKeepValue(
+        player,
+        a,
+        goal
+      )-
+      cpuResourceKeepValue(
+        player,
+        b,
+        goal
+      );
+
+    if(
+      Math.abs(valueDifference)>.001
+    ){
+      return valueDifference;
+    }
+
+    return (
+      player.resources[b]-
+      player.resources[a]
+    );
+  });
+
+  return candidates[0];
+}
+
+function cpuVictimScore(victim,thief=null){
+  if(!victim) return -9999;
+
+  const points=publicVP(victim);
+  const resources=totalResources(victim);
+
+  let score=
+    points*4.2+
+    resources*1.1;
+
+  if(victim.hasLongestRoad){
+    score+=3.5;
+  }
+
+  if(victim.hasLargestArmy){
+    score+=3.5;
+  }
+
+  if(
+    thief &&
+    points>publicVP(thief)
+  ){
+    score+=
+      (points-publicVP(thief))*2.2;
+  }
+
+  return score;
+}
+
+function cpuChooseVictimFromCandidates(
+  candidates,
+  thiefId
+){
+  if(!candidates?.length) return null;
+
+  const thief=playerById(thiefId);
+
+  return [...candidates]
+    .sort(
+      (a,b)=>
+        cpuVictimScore(b,thief)-
+        cpuVictimScore(a,thief)
+    )[0]||null;
+}
+
+function cpuGoalMissingResources(player,goal){
+  if(!goal?.cost) return [];
+
+  return RESOURCES
+    .map(resource=>({
+      resource,
+      missing:
+        Math.max(
+          0,
+          (goal.cost[resource]||0)-
+          player.resources[resource]
+        ),
+    }))
+    .filter(item=>item.missing>0)
+    .sort((a,b)=>{
+      if(b.missing!==a.missing){
+        return b.missing-a.missing;
+      }
+
+      return (
+        cpuResourceKeepValue(
+          player,
+          b.resource,
+          goal
+        )-
+        cpuResourceKeepValue(
+          player,
+          a.resource,
+          goal
+        )
+      );
+    });
+}
+
+function cpuMonopolyResourceScore(
+  player,
+  resource
+){
+  /*
+    銀行在庫と自分の所持から、
+    他プレイヤー全体の保有枚数を推定する。
+  */
+  const supply=
+    expectedResourceSupply();
+
+  const othersTotal=
+    Math.max(
+      0,
+      supply-
+      (game.bank[resource]||0)-
+      (player.resources[resource]||0)
+    );
+
+  return (
+    othersTotal*3+
+    cpuResourceKeepValue(
+      player,
+      resource
+    )
+  );
+}
+
+function cpuBestMonopolyResource(player){
+  const resources=[...RESOURCES]
+    .sort(
+      (a,b)=>
+        cpuMonopolyResourceScore(
+          player,
+          b
+        )-
+        cpuMonopolyResourceScore(
+          player,
+          a
+        )
+    );
+
+  const resource=resources[0];
+  const supply=
+    expectedResourceSupply();
+
+  const othersTotal=
+    Math.max(
+      0,
+      supply-
+      (game.bank[resource]||0)-
+      (player.resources[resource]||0)
+    );
+
+  return {
+    resource,
+    othersTotal,
+  };
+}
+
+function cpuCanYearOfPlentyHelp(player){
+  if(
+    usableDevCount(
+      player,
+      "yearOfPlenty"
+    )<=0
+  ){
+    return false;
+  }
+
+  const goal=cpuChooseGoal(player);
+
+  if(!goal?.cost) return false;
+
+  const missing=
+    cpuResourceMissingCount(
+      player,
+      goal.cost
+    );
+
+  return missing>0 && missing<=2;
+}
+
+function cpuShouldPlayKnight(player){
+  if(
+    usableDevCount(
+      player,
+      "knight"
+    )<=0
+  ){
+    return false;
+  }
+
+  if(robberHurtsPlayer(player)){
+    return true;
+  }
+
+  const nextKnights=
+    player.knightsPlayed+1;
+
+  const maximumOpponentKnights=
+    Math.max(
+      0,
+      ...game.players
+        .filter(other=>other.id!==player.id)
+        .map(other=>other.knightsPlayed||0)
+    );
+
+  if(
+    nextKnights>=3 &&
+    nextKnights>maximumOpponentKnights
+  ){
+    return true;
+  }
+
+  const leader=
+    [...game.players]
+      .filter(other=>other.id!==player.id)
+      .sort(
+        (a,b)=>
+          publicVP(b)-publicVP(a)
+      )[0];
+
+  return (
+    !!leader &&
+    publicVP(leader)>=7 &&
+    robberTargetScore(
+      cpuBestRobberHexId(player.id),
+      player.id
+    )>6
+  );
+}
+
+function cpuBestRobberHexId(playerId){
+  const options=
+    game.board.hexes.filter(
+      hex=>hex.id!==game.robberHex
+    );
+
+  if(!options.length){
+    return game.robberHex;
+  }
+
+  options.sort(
+    (a,b)=>
+      robberTargetScore(
+        b,
+        playerId
+      )-
+      robberTargetScore(
+        a,
+        playerId
+      )
+  );
+
+  return options[0].id;
+}
+
+function cpuDiscardHalf(player,need){
+  const actualNeed=
+    Math.max(
+      0,
+      Math.min(
+        Number(need)||0,
+        totalResources(player)
+      )
+    );
+
+  if(actualNeed<=0) return false;
+
+  let left=actualNeed;
+
+  while(left>0){
+    const resource=
+      cpuChooseDiscardResource(player);
+
+    if(!resource) break;
+
+    player.resources[resource]--;
+    game.bank[resource]++;
+    left--;
+  }
+
+  const discarded=
+    actualNeed-left;
+
+  if(discarded>0){
+    showResourceDelta(
+      player.id,
+      {unknown:-discarded},
+      "7の破棄"
+    );
+
+    log(
+      `${player.name}は資源を`+
+      `${discarded}枚捨てました。`
+    );
+  }
+
+  return discarded===actualNeed;
+}
+
+function clearCpuDiscardSchedule(){
+  clearTimeout(cpuDiscardTimer);
+  cpuDiscardTimer=null;
+  cpuDiscardScheduledKey=null;
+}
+
+function scheduleCpuDiscard(
+  player,
+  need
+){
+  if(
+    !player ||
+    player.human ||
+    !game ||
+    game.phase!=="discard"
+  ){
+    return false;
+  }
+
+  if(
+    ONLINE_MODE &&
+    !isOnlineHost()
+  ){
+    return false;
+  }
+
+  const scheduledKey=[
+    game.turnSerial,
+    player.id,
+    need,
+    totalResources(player),
+  ].join(":");
+
+  if(
+    cpuDiscardTimer &&
+    cpuDiscardScheduledKey===scheduledKey
+  ){
+    return true;
+  }
+
+  clearCpuDiscardSchedule();
+  cpuDiscardScheduledKey=scheduledKey;
+
+  cpuDiscardTimer=setTimeout(()=>{
+    cpuDiscardTimer=null;
+
+    if(
+      !game ||
+      game.phase!=="discard" ||
+      !Array.isArray(game.discardQueue) ||
+      game.discardQueue[0]!==player.id
+    ){
+      cpuDiscardScheduledKey=null;
+      return;
+    }
+
+    const currentPlayerById=
+      playerById(player.id);
+
+    if(
+      !currentPlayerById ||
+      currentPlayerById.human
+    ){
+      cpuDiscardScheduledKey=null;
+      return;
+    }
+
+    const currentNeed=
+      Math.floor(
+        totalResources(
+          currentPlayerById
+        )/2
+      );
+
+    cpuDiscardHalf(
+      currentPlayerById,
+      currentNeed
+    );
+
+    game.discardQueue.shift();
+    game.discardPlayerId=null;
+    cpuDiscardScheduledKey=null;
+
+    processDiscardQueue();
+  },260);
+
+  return true;
+}
+
+function resumeCpuDiscardIfNeeded(){
+  if(
+    !game ||
+    game.phase!=="discard" ||
+    !Array.isArray(game.discardQueue) ||
+    !game.discardQueue.length
+  ){
+    clearCpuDiscardSchedule();
+    return false;
+  }
+
+  const player=
+    playerById(
+      game.discardQueue[0]
+    );
+
+  if(
+    !player ||
+    player.human
+  ){
+    return false;
+  }
+
+  const need=
+    Math.floor(
+      totalResources(player)/2
+    );
+
+  return scheduleCpuDiscard(
+    player,
+    need
+  );
 }
 
 function openDiscardModal(player,need){
@@ -2220,14 +3179,12 @@ function processDiscardQueue(){
   render();
 
   if(!player.human){
-    if(ONLINE_MODE && !isOnlineHost()) return;
-    setTimeout(()=>{
-      cpuDiscardHalf(player,need);
-      game.discardQueue.shift();
-      game.discardPlayerId=null;
-      processDiscardQueue();
-    },260);
+    scheduleCpuDiscard(
+      player,
+      need
+    );
   }else if(isLocalPlayer(player)){
+    clearCpuDiscardSchedule();
     openDiscardModal(player,need);
   }
 }
@@ -2499,20 +3456,138 @@ function stealRandom(thiefId,victimId,reason="🐱"){
   log(`${thief.name}が${reason==="🐱"?"🐱で":"魚の効果で"}${victim.name}から資源を1枚奪いました。`);
 }
 function cpuMoveRobber(playerId){
-  const options=game.board.hexes.filter(h=>h.id!==game.robberHex);
-  options.sort((a,b)=>robberTargetScore(b,playerId)-robberTargetScore(a,playerId));
-  moveRobberTo(options[0].id,playerId);
-}
-function robberTargetScore(h,playerId){
-  let score=0;
-  for(const vid of h.corners){
-    const b=game.board.vertices[vid].building;
-    if(!b) continue;
-    const v=b.type==="city"?2:1;
-    score += b.player===playerId ? -v*5 : v*3;
+  const bestHexId=
+    cpuBestRobberHexId(playerId);
+
+  if(
+    bestHexId===null ||
+    bestHexId===undefined
+  ){
+    finishRobberMove(
+      playerId,
+      null
+    );
+    return;
   }
-  const productionWeight=h.number?PIPS[h.number]:(h.lakeNumbers||[]).reduce((s,n)=>s+(PIPS[n]||0),0)/2;
-  return score+productionWeight;
+
+  const hex=
+    game.board.hexes[bestHexId];
+
+  game.robberHex=bestHexId;
+
+  const candidates=
+    robberVictimCandidates(
+      bestHexId,
+      playerId
+    );
+
+  const victim=
+    cpuChooseVictimFromCandidates(
+      candidates,
+      playerId
+    );
+
+  finishRobberMove(
+    playerId,
+    victim?.id??null
+  );
+}
+
+function robberTargetScore(h,playerId){
+  if(
+    typeof h==="number" ||
+    typeof h==="string"
+  ){
+    h=game.board.hexes[h];
+  }
+
+  if(!h) return -9999;
+
+  const thief=playerById(playerId);
+
+  const productionWeight=
+    h.number
+      ?PIPS[h.number]||0
+      :(h.lakeNumbers||[])
+        .reduce(
+          (sum,number)=>
+            sum+(PIPS[number]||0),
+          0
+        )/2;
+
+  let score=0;
+  let opponentBuildings=0;
+
+  for(const vertexId of h.corners){
+    const building=
+      game.board.vertices[vertexId]?.building;
+
+    if(!building) continue;
+
+    const owner=
+      playerById(building.player);
+
+    const strength=
+      cpuBuildingMultiplier(
+        building
+      );
+
+    if(building.player===playerId){
+      score -=
+        strength*
+        (
+          6+
+          productionWeight*1.8
+        );
+
+      continue;
+    }
+
+    opponentBuildings+=strength;
+
+    const threat=
+      1+
+      publicVP(owner)*.18+
+      totalResources(owner)*.035+
+      (
+        owner.hasLongestRoad ||
+        owner.hasLargestArmy
+          ?0.35
+          :0
+      );
+
+    score +=
+      strength*
+      productionWeight*
+      threat;
+  }
+
+  const candidates=
+    robberVictimCandidates(
+      h.id,
+      playerId
+    );
+
+  const bestVictim=
+    cpuChooseVictimFromCandidates(
+      candidates,
+      playerId
+    );
+
+  if(bestVictim){
+    score +=
+      cpuVictimScore(
+        bestVictim,
+        thief
+      )*.42;
+  }
+
+  if(opponentBuildings===0){
+    score-=4.5;
+  }
+
+  return score+
+    Math.random()*.05;
 }
 
 function setBuildMode(mode){
@@ -3089,10 +4164,24 @@ function spendFish(player,indices,cost,reason){
   return paid>=cost;
 }
 function chooseVictim(playerId){
-  const candidates=game.players.filter(p=>p.id!==playerId&&totalResources(p)>0);
+  const candidates=
+    game.players.filter(
+      player=>
+        player.id!==playerId &&
+        totalResources(player)>0
+    );
+
   if(!candidates.length) return null;
+
   const player=playerById(playerId);
-  if(!isLocalPlayer(player)) return candidates.sort((a,b)=>totalResources(b)-totalResources(a))[0].id;
+
+  if(!isLocalPlayer(player)){
+    return cpuChooseVictimFromCandidates(
+      candidates,
+      playerId
+    )?.id??null;
+  }
+
   return candidates;
 }
 
@@ -3444,43 +4533,212 @@ function robberHurtsPlayer(player){
 }
 function cpuUseFish(player){
   if(!game.fishermen) return;
+
   let actions=0;
+
   while(actions<3){
-    if(game.devDeck.length && findFishPayment(player.fishTokens,7)){
-      cpuSpendFish(player,7,"無料発展カード");
-      if(grantFreeDevelopmentCard(player,`${player.name}の魚7匹`)) actions++;
-      continue;
-    }
-    if(!cpuHasBuildOption(player) && findFishPayment(player.fishTokens,4)){
-      const goals=[COST.city,COST.settlement,COST.road,COST.dev];
-      let missing=null;
-      for(const goal of goals){
-        missing=RESOURCES.find(r=>(goal[r]||0)>player.resources[r]&&game.bank[r]>0);
-        if(missing) break;
-      }
-      if(missing){
-        cpuSpendFish(player,4,`${RESOURCE_JA[missing]}獲得`);
-        const got=gainResource(player,missing,1);
-        showResourceDelta(player.id,{[missing]:got},"魚4匹");
-        actions++; continue;
-      }
-    }
-    if(player.pieces.road>0 && findFishPayment(player.fishTokens,5)){
-      const edges=Object.keys(game.board.edges).filter(e=>canPlaceRoad(player.id,e)).sort((a,b)=>roadExpansionScore(b,player.id)-roadExpansionScore(a,player.id));
-      if(edges.length){ cpuSpendFish(player,5,"無料街道"); placeRoad(player.id,edges[0],true); log(`${player.name}が魚で無料街道を建てました。`); actions++; continue; }
-    }
-    if(robberHurtsPlayer(player)&&game.robberHex!==null&&findFishPayment(player.fishTokens,2)){
-      cpuSpendFish(player,2,"🐱を盤外へ");
+    /*
+      自分の生産地が盗賊で止められているなら
+      まず2匹で追放する。
+    */
+    if(
+      robberHurtsPlayer(player) &&
+      game.robberHex!==null &&
+      findFishPayment(
+        player.fishTokens,
+        2
+      )
+    ){
+      cpuSpendFish(
+        player,
+        2,
+        "🐱を盤外へ"
+      );
+
       game.robberHex=null;
-      queueAwardEvent("fishRemoveRobber",player.id);
-      log(`${player.name}が魚で🐱を盤外へ追い出しました。`);
+
+      queueAwardEvent(
+        "fishRemoveRobber",
+        player.id
+      );
+
+      log(
+        `${player.name}が魚で`+
+        "🐱を盤外へ追い出しました。"
+      );
+
       actions++;
       continue;
     }
-    if(findFishPayment(player.fishTokens,3)&&Math.random()<.35){
-      const victim=chooseVictim(player.id);
-      if(victim!==null){ cpuSpendFish(player,3,"資源強奪"); stealRandom(player.id,victim,"魚3匹"); actions++; continue; }
+
+    const goal=
+      cpuChooseGoal(player);
+
+    const missing=
+      cpuGoalMissingResources(
+        player,
+        goal
+      );
+
+    /*
+      4匹で目標建設を完成・接近できるなら
+      その不足資源を取る。
+    */
+    if(
+      missing.length &&
+      findFishPayment(
+        player.fishTokens,
+        4
+      )
+    ){
+      const resource=
+        missing.find(
+          item=>
+            game.bank[
+              item.resource
+            ]>0
+        )?.resource;
+
+      if(resource){
+        cpuSpendFish(
+          player,
+          4,
+          `${RESOURCE_JA[resource]}獲得`
+        );
+
+        const got=
+          gainResource(
+            player,
+            resource,
+            1
+          );
+
+        showResourceDelta(
+          player.id,
+          {[resource]:got},
+          "魚4匹"
+        );
+
+        actions++;
+        continue;
+      }
     }
+
+    /*
+      開拓地候補へ伸ばす価値が高い時だけ
+      5匹の無料街道を使う。
+    */
+    if(
+      player.pieces.road>0 &&
+      findFishPayment(
+        player.fishTokens,
+        5
+      )
+    ){
+      const bestRoad=
+        cpuBestRoadTarget(player);
+
+      if(
+        bestRoad &&
+        bestRoad.score>=13
+      ){
+        cpuSpendFish(
+          player,
+          5,
+          "無料街道"
+        );
+
+        placeRoad(
+          player.id,
+          bestRoad.id,
+          true
+        );
+
+        log(
+          `${player.name}が魚で`+
+          "無料街道を建てました。"
+        );
+
+        actions++;
+        continue;
+      }
+    }
+
+    /*
+      相手が資源を多く持っている場合は
+      3匹の強奪も使う。
+    */
+    if(
+      findFishPayment(
+        player.fishTokens,
+        3
+      )
+    ){
+      const candidates=
+        game.players.filter(
+          other=>
+            other.id!==player.id &&
+            totalResources(other)>0
+        );
+
+      const victim=
+        cpuChooseVictimFromCandidates(
+          candidates,
+          player.id
+        );
+
+      if(
+        victim &&
+        (
+          totalResources(victim)>=5 ||
+          publicVP(victim)>=7
+        )
+      ){
+        cpuSpendFish(
+          player,
+          3,
+          "資源強奪"
+        );
+
+        stealRandom(
+          player.id,
+          victim.id,
+          "魚3匹"
+        );
+
+        actions++;
+        continue;
+      }
+    }
+
+    /*
+      他に明確な用途がなければ
+      7匹で発展カードを取得。
+    */
+    if(
+      game.devDeck.length &&
+      findFishPayment(
+        player.fishTokens,
+        7
+      )
+    ){
+      cpuSpendFish(
+        player,
+        7,
+        "無料発展カード"
+      );
+
+      if(
+        grantFreeDevelopmentCard(
+          player,
+          `${player.name}の魚7匹`
+        )
+      ){
+        actions++;
+        continue;
+      }
+    }
+
     break;
   }
 }
@@ -3705,8 +4963,27 @@ function cpuAct(){
   }
   if(game.phase==="setupRoad"){
     const options=game.board.vertices[game.setupVertex].edges.filter(e=>canPlaceRoad(p.id,e,game.setupVertex));
-    options.sort((a,b)=>futureVertexScore(otherEnd(a,game.setupVertex))-futureVertexScore(otherEnd(b,game.setupVertex)));
-    const e=options[options.length-1] || options[0];
+    options.sort(
+      (a,b)=>
+        futureVertexScore(
+          otherEnd(
+            b,
+            game.setupVertex
+          ),
+          p.id
+        )-
+        futureVertexScore(
+          otherEnd(
+            a,
+            game.setupVertex
+          ),
+          p.id
+        )
+    );
+
+    const e=
+      options[0]||
+      options[options.length-1];
     game.board.edges[e].road=p.id; p.roads.push(e); p.pieces.road--;
     log(`${p.name}が初期街道を置きました。`);
     advanceSetup(); return;
@@ -3731,87 +5008,229 @@ function cpuAct(){
 }
 
 function cpuBuildPhase(p){
-  if(game.winner || game.current!==p.id) return;
+  if(
+    game.winner ||
+    game.current!==p.id
+  ){
+    cpuActionRunning=false;
+    return;
+  }
 
   cpuUseFish(p);
+
   checkVictory();
+
   if(game.winner){
     cpuActionRunning=false;
     render();
     return;
   }
 
-  // 発展カードは購入ターンを含め、1ターンに何枚でも使用可能
-  const vpCount=usableDevCount(p,"vp");
-  const neededForWin=Math.max(0,victoryTarget(p)-totalVP(p));
-  if(vpCount>0){
-    if(neededForWin>0 && neededForWin<=vpCount){
-      for(let i=0;i<neededForWin && !game.winner;i++) cpuPlayVictoryPoint(p);
-    } else if(Math.random()<.22){
-      cpuPlayVictoryPoint(p);
-    }
-    if(game.winner){
-      cpuActionRunning=false;
-      render();
-      return;
-    }
-  }
+  const devResult=
+    cpuUseStrategicDevelopment(p);
 
-  // 騎士使用後は再びこの処理へ戻るため、続けて複数枚使用することもある
-  if(usableDevCount(p,"knight")>0 && Math.random()<.28){
-    cpuPlayKnight(p);
+  if(devResult==="finished"){
+    cpuActionRunning=false;
+    render();
     return;
   }
 
-  // 建設前に、必要なら銀行・港交易を数回試す
-  for(let i=0;i<4 && !p.builtThisTurn;i++){
-    if(cpuHasBuildOption(p)) break;
-    if(!cpuTryBankTrade(p)) break;
+  if(devResult==="knight"){
+    return;
   }
 
-  // 街道・開拓地・都市・発展カード購入のうち、各ターン1回だけ
-  if(!p.builtThisTurn && p.pieces.city>0 && hasCost(p,COST.city)){
-    const targets=p.settlements.slice().sort((a,b)=>vertexProductionScore(b)-vertexProductionScore(a));
-    if(targets.length){
-      placeCity(p.id,targets[0]);
-      p.builtThisTurn=true;
-      log(`${p.name}が都市を建てました。`);
+  /*
+    目標建設を決めてから、
+    その目標を完成させるための銀行・港交易を行う。
+  */
+  for(
+    let attempt=0;
+    attempt<4 &&
+    !p.builtThisTurn;
+    attempt++
+  ){
+    if(cpuHasBuildOption(p)){
+      break;
+    }
+
+    if(!cpuTryBankTrade(p)){
+      break;
     }
   }
-  if(!p.builtThisTurn && p.pieces.settlement>0 && hasCost(p,COST.settlement)){
-    const targets=Object.keys(game.board.vertices).filter(v=>canPlaceSettlement(p.id,v,false));
-    targets.sort((a,b)=>vertexProductionScore(b)-vertexProductionScore(a));
-    if(targets.length){
-      payCost(p,COST.settlement,"開拓地建設");
-      placeSettlement(p.id,targets[0],false);
-      p.builtThisTurn=true;
-      log(`${p.name}が開拓地を建てました。`);
+
+  if(!p.builtThisTurn){
+    const plans=[];
+
+    if(
+      p.pieces.city>0 &&
+      hasCost(p,COST.city)
+    ){
+      const target=
+        cpuBestCityTarget(p);
+
+      if(target){
+        plans.push({
+          kind:"city",
+          targetId:target.id,
+          score:
+            125+
+            target.score*1.35,
+        });
+      }
     }
-  }
-  if(!p.builtThisTurn && p.pieces.road>0 && hasCost(p,COST.road)){
-    const targets=Object.keys(game.board.edges).filter(e=>canPlaceRoad(p.id,e));
-    targets.sort((a,b)=>roadExpansionScore(b,p.id)-roadExpansionScore(a,p.id));
-    if(targets.length && (p.roads.length<4 || Math.random()<.7)){
-      placeRoad(p.id,targets[0],false);
-      p.builtThisTurn=true;
-      log(`${p.name}が街道を建てました。`);
+
+    if(
+      p.pieces.settlement>0 &&
+      hasCost(
+        p,
+        COST.settlement
+      )
+    ){
+      const target=
+        cpuBestSettlementTarget(p);
+
+      if(target){
+        plans.push({
+          kind:"settlement",
+          targetId:target.id,
+          score:
+            119+
+            target.score*1.4,
+        });
+      }
     }
-  }
-  if(!p.builtThisTurn && game.devDeck.length && hasCost(p,COST.dev) && Math.random()<.55){
-    buyDev(p.id);
+
+    if(
+      p.pieces.road>0 &&
+      hasCost(p,COST.road)
+    ){
+      const target=
+        cpuBestRoadTarget(p);
+
+      if(target){
+        const noSettlementSite=
+          !cpuBestSettlementTarget(p);
+
+        plans.push({
+          kind:"road",
+          targetId:target.id,
+          score:
+            (
+              noSettlementSite
+                ?105
+                :72
+            )+
+            target.score*1.1,
+        });
+      }
+    }
+
+    if(
+      game.devDeck.length &&
+      hasCost(p,COST.dev)
+    ){
+      const maximumOpponentKnights=
+        Math.max(
+          0,
+          ...game.players
+            .filter(
+              other=>other.id!==p.id
+            )
+            .map(
+              other=>
+                other.knightsPlayed||0
+            )
+        );
+
+      const armyInterest=
+        p.knightsPlayed<=
+        maximumOpponentKnights+1
+          ?12
+          :4;
+
+      plans.push({
+        kind:"dev",
+        targetId:null,
+        score:82+armyInterest,
+      });
+    }
+
+    plans.sort(
+      (a,b)=>b.score-a.score
+    );
+
+    const plan=plans[0];
+
+    if(plan){
+      if(plan.kind==="city"){
+        placeCity(
+          p.id,
+          plan.targetId
+        );
+
+        p.builtThisTurn=true;
+
+        log(
+          `${p.name}が都市を建てました。`
+        );
+      }else if(
+        plan.kind==="settlement"
+      ){
+        payCost(
+          p,
+          COST.settlement,
+          "開拓地建設"
+        );
+
+        placeSettlement(
+          p.id,
+          plan.targetId,
+          false
+        );
+
+        p.builtThisTurn=true;
+
+        log(
+          `${p.name}が開拓地を建てました。`
+        );
+      }else if(plan.kind==="road"){
+        placeRoad(
+          p.id,
+          plan.targetId,
+          false
+        );
+
+        p.builtThisTurn=true;
+
+        log(
+          `${p.name}が街道を建てました。`
+        );
+      }else if(plan.kind==="dev"){
+        buyDev(p.id);
+      }
+    }
   }
 
   updateAwards();
   checkVictory();
   render();
+
   if(!game.winner){
     clearTimeout(cpuTimer);
+
     cpuTimer=setTimeout(()=>{
       cpuTimer=null;
-      if(!game || game.winner || game.current!==p.id || p.human){
+
+      if(
+        !game ||
+        game.winner ||
+        game.current!==p.id ||
+        p.human
+      ){
         cpuActionRunning=false;
         return;
       }
+
       finishActivePhase();
     },450);
   }else{
@@ -3830,21 +5249,136 @@ function cpuHasBuildOption(p){
 }
 
 function cpuTryBankTrade(p){
-  const goals=[COST.city,COST.settlement,COST.road,COST.dev];
-  let target=null, missing=null;
-  for(const g of goals){
-    const miss=RESOURCES.filter(r=>(g[r]||0)>p.resources[r]);
-    if(miss.length===1){ target=g; missing=miss[0]; break; }
+  const goal=cpuChooseGoal(p);
+
+  if(!goal?.cost) return false;
+
+  const missing=
+    cpuGoalMissingResources(
+      p,
+      goal
+    );
+
+  if(!missing.length){
+    return false;
   }
-  if(!target || game.bank[missing]<1) return false;
-  const give=RESOURCES
-    .filter(r=>r!==missing && p.resources[r]>=getTradeRate(p,r))
-    .sort((a,b)=>(p.resources[b]-(target[b]||0))-(p.resources[a]-(target[a]||0)))[0];
-  if(!give) return false;
-  const rate=getTradeRate(p,give);
-  p.resources[give]-=rate; game.bank[give]+=rate; p.resources[missing]++; game.bank[missing]--;
-  showResourceDelta(p.id,{[give]:-rate,[missing]:1},"銀行・港交易");
-  log(`${p.name}が銀行・港と交易しました。`);
+
+  const receiveResource=
+    missing.find(
+      item=>
+        game.bank[item.resource]>0
+    )?.resource;
+
+  if(!receiveResource){
+    return false;
+  }
+
+  const giveCandidates=
+    RESOURCES
+      .filter(resource=>{
+        if(resource===receiveResource){
+          return false;
+        }
+
+        const rate=
+          getTradeRate(
+            p,
+            resource
+          );
+
+        if(
+          p.resources[resource]<
+          rate
+        ){
+          return false;
+        }
+
+        const goalNeed=
+          goal.cost[resource]||0;
+
+        const surplus=
+          p.resources[resource]-
+          goalNeed;
+
+        /*
+          原則として目標建設に必要な資源は
+          崩さず、余剰から交易する。
+        */
+        return surplus>=rate;
+      })
+      .sort((a,b)=>{
+        const rateA=
+          getTradeRate(p,a);
+
+        const rateB=
+          getTradeRate(p,b);
+
+        if(rateA!==rateB){
+          return rateA-rateB;
+        }
+
+        const keepA=
+          cpuResourceKeepValue(
+            p,
+            a,
+            goal
+          );
+
+        const keepB=
+          cpuResourceKeepValue(
+            p,
+            b,
+            goal
+          );
+
+        if(
+          Math.abs(
+            keepA-keepB
+          )>.001
+        ){
+          return keepA-keepB;
+        }
+
+        return (
+          p.resources[b]-
+          p.resources[a]
+        );
+      });
+
+  const giveResource=
+    giveCandidates[0];
+
+  if(!giveResource){
+    return false;
+  }
+
+  const rate=
+    getTradeRate(
+      p,
+      giveResource
+    );
+
+  p.resources[giveResource]-=rate;
+  game.bank[giveResource]+=rate;
+
+  p.resources[receiveResource]++;
+  game.bank[receiveResource]--;
+
+  showResourceDelta(
+    p.id,
+    {
+      [giveResource]:-rate,
+      [receiveResource]:1,
+    },
+    "銀行・港交易"
+  );
+
+  log(
+    `${p.name}が`+
+    `${RESOURCE_JA[giveResource]}${rate}枚を`+
+    `${RESOURCE_JA[receiveResource]}1枚へ交易しました。`
+  );
+
   return true;
 }
 
@@ -3856,6 +5390,345 @@ function cpuPlayVictoryPoint(p){
   p.revealedVP++;
   log(`${p.name}が勝利ポイントカードを公開しました。`);
   checkVictory();
+}
+
+function cpuPlayYearOfPlenty(p){
+  if(
+    usableDevCount(
+      p,
+      "yearOfPlenty"
+    )<=0
+  ){
+    return false;
+  }
+
+  const goal=cpuChooseGoal(p);
+  const selected=[];
+  const simulated={
+    ...p.resources,
+  };
+
+  for(let draw=0;draw<2;draw++){
+    const missing=
+      goal?.cost
+        ?RESOURCES
+          .filter(resource=>
+            game.bank[resource]>0 &&
+            simulated[resource]<
+              (goal.cost[resource]||0)
+          )
+          .sort(
+            (a,b)=>
+              (
+                (goal.cost[b]||0)-
+                simulated[b]
+              )-
+              (
+                (goal.cost[a]||0)-
+                simulated[a]
+              )
+          )
+        :[];
+
+    let resource=missing[0];
+
+    if(!resource){
+      resource=
+        RESOURCES
+          .filter(
+            candidate=>
+              game.bank[candidate]>0
+          )
+          .sort(
+            (a,b)=>
+              cpuResourceKeepValue(
+                p,
+                b,
+                goal
+              )-
+              cpuResourceKeepValue(
+                p,
+                a,
+                goal
+              )
+          )[0];
+    }
+
+    if(!resource) break;
+
+    selected.push(resource);
+    simulated[resource]++;
+  }
+
+  if(!selected.length) return false;
+
+  const index=
+    p.dev.indexOf(
+      "yearOfPlenty"
+    );
+
+  if(index<0) return false;
+
+  p.dev.splice(index,1);
+  queueAwardEvent(
+    "devDiscovery",
+    p.id
+  );
+
+  const delta={};
+
+  for(const resource of selected){
+    const got=
+      gainResource(
+        p,
+        resource,
+        1
+      );
+
+    if(got){
+      delta[resource]=
+        (delta[resource]||0)+got;
+    }
+  }
+
+  showResourceDelta(
+    p.id,
+    delta,
+    "発見"
+  );
+
+  log(
+    `${p.name}が発見を使い、`+
+    `${selected.map(
+      resource=>RESOURCE_JA[resource]
+    ).join("・")}を獲得しました。`
+  );
+
+  return true;
+}
+
+function cpuPlayMonopoly(p){
+  if(
+    usableDevCount(
+      p,
+      "monopoly"
+    )<=0
+  ){
+    return false;
+  }
+
+  const best=
+    cpuBestMonopolyResource(p);
+
+  if(
+    !best ||
+    best.othersTotal<=0
+  ){
+    return false;
+  }
+
+  const threshold=
+    publicVP(p)>=7
+      ?2
+      :3;
+
+  if(best.othersTotal<threshold){
+    return false;
+  }
+
+  const index=
+    p.dev.indexOf(
+      "monopoly"
+    );
+
+  if(index<0) return false;
+
+  p.dev.splice(index,1);
+
+  queueAwardEvent(
+    "devMonopoly",
+    p.id
+  );
+
+  let amount=0;
+
+  for(const other of game.players){
+    if(other.id===p.id) continue;
+
+    const taken=
+      other.resources[
+        best.resource
+      ]||0;
+
+    if(!taken) continue;
+
+    amount+=taken;
+    p.resources[best.resource]+=taken;
+    other.resources[best.resource]=0;
+
+    showResourceDelta(
+      other.id,
+      {[best.resource]:-taken},
+      "独占"
+    );
+  }
+
+  showResourceDelta(
+    p.id,
+    {[best.resource]:amount},
+    "独占"
+  );
+
+  log(
+    `${p.name}が独占を使い、`+
+    `${RESOURCE_JA[best.resource]}を`+
+    `${amount}枚集めました。`
+  );
+
+  return true;
+}
+
+function cpuPlayRoadBuilding(p){
+  if(
+    usableDevCount(
+      p,
+      "roadBuilding"
+    )<=0 ||
+    p.pieces.road<=0
+  ){
+    return false;
+  }
+
+  const first=
+    cpuBestRoadTarget(p);
+
+  if(!first) return false;
+
+  const index=
+    p.dev.indexOf(
+      "roadBuilding"
+    );
+
+  if(index<0) return false;
+
+  p.dev.splice(index,1);
+
+  queueAwardEvent(
+    "devRoadBuilding",
+    p.id
+  );
+
+  let placed=0;
+
+  for(let count=0;count<2;count++){
+    if(p.pieces.road<=0) break;
+
+    const best=
+      cpuBestRoadTarget(p);
+
+    if(!best) break;
+
+    placeRoad(
+      p.id,
+      best.id,
+      true
+    );
+
+    placed++;
+  }
+
+  if(!placed){
+    return false;
+  }
+
+  log(
+    `${p.name}が街道建設を使い、`+
+    `無料で街道を${placed}本建てました。`
+  );
+
+  return true;
+}
+
+function cpuUseStrategicDevelopment(p){
+  /*
+    勝利点カードは勝利に必要な分だけ公開する。
+  */
+  const vpCount=
+    usableDevCount(
+      p,
+      "vp"
+    );
+
+  const neededForWin=
+    Math.max(
+      0,
+      victoryTarget(p)-
+      totalVP(p)
+    );
+
+  if(
+    vpCount>0 &&
+    neededForWin>0 &&
+    neededForWin<=vpCount
+  ){
+    for(
+      let count=0;
+      count<neededForWin &&
+      !game.winner;
+      count++
+    ){
+      cpuPlayVictoryPoint(p);
+    }
+
+    if(game.winner){
+      return "finished";
+    }
+  }
+
+  /*
+    いま欲しい建設物まで1～2枚不足なら
+    発見で完成させる。
+  */
+  if(cpuCanYearOfPlentyHelp(p)){
+    cpuPlayYearOfPlenty(p);
+  }
+
+  /*
+    他プレイヤーに十分な枚数が集まっている時だけ
+    独占を使用する。
+  */
+  cpuPlayMonopoly(p);
+
+  /*
+    無料街道で実際に伸ばせる時だけ使う。
+  */
+  const goal=cpuChooseGoal(p);
+
+  if(
+    usableDevCount(
+      p,
+      "roadBuilding"
+    )>0 &&
+    (
+      goal?.kind==="road" ||
+      !cpuBestSettlementTarget(p)
+    )
+  ){
+    cpuPlayRoadBuilding(p);
+  }
+
+  /*
+    騎士は、盗賊を自分から退けたい時、
+    または最大騎士団を取れる時を優先。
+    騎士だけは盗賊移動で非同期に続くため、
+    使用した場合は呼び出し元を一度終了する。
+  */
+  if(cpuShouldPlayKnight(p)){
+    cpuPlayKnight(p);
+    return "knight";
+  }
+
+  return "done";
 }
 
 function cpuPlayKnight(p){
@@ -3883,31 +5756,271 @@ function usableDevCount(p,card){
   return p.dev.filter(c=>c===card).length;
 }
 function otherEnd(edgeId,vertexId){
-  const e=game.board.edges[edgeId]; return e.a===vertexId?e.b:e.a;
+  const e=game.board.edges[edgeId];
+  return e.a===vertexId
+    ?e.b
+    :e.a;
 }
-function futureVertexScore(v){ return vertexProductionScore(v); }
+
+function futureVertexScore(
+  vertexId,
+  playerId=currentPlayer()?.id
+){
+  if(
+    playerId===undefined ||
+    playerId===null
+  ){
+    return vertexProductionScore(
+      vertexId
+    );
+  }
+
+  return cpuVertexStrategicScore(
+    vertexId,
+    playerId,
+    {setup:true}
+  );
+}
+
 function bestSetupVertex(playerId){
-  const candidates=Object.keys(game.board.vertices).filter(v=>canPlaceSettlement(playerId,v,true));
-  candidates.sort((a,b)=>setupVertexScore(b,playerId)-setupVertexScore(a,playerId));
+  const candidates=
+    Object.keys(game.board.vertices)
+      .filter(vertexId=>
+        canPlaceSettlement(
+          playerId,
+          vertexId,
+          true
+        )
+      );
+
+  candidates.sort(
+    (a,b)=>
+      setupVertexScore(
+        b,
+        playerId
+      )-
+      setupVertexScore(
+        a,
+        playerId
+      )
+  );
+
   return candidates[0];
 }
-function setupVertexScore(v,playerId){
-  const base=vertexProductionScore(v);
-  const resources=new Set(game.board.vertices[v].hexes.map(h=>game.board.hexes[h].resource).filter(r=>RESOURCES.includes(r)));
-  const fishing=game.fishermen&&isFishingVertex(v)?3:0;
-  return base+resources.size*2+fishing+Math.random()*2;
+
+function setupVertexScore(
+  vertexId,
+  playerId
+){
+  return cpuVertexStrategicScore(
+    vertexId,
+    playerId,
+    {setup:true}
+  );
 }
+
 function vertexProductionScore(v){
   return game.board.vertices[v].hexes.reduce((s,h)=>{
     const x=game.board.hexes[h];
-    if(x.number) return s+(PIPS[x.number]||0);
-    if(x.resource==="lake") return s+x.lakeNumbers.reduce((n,v)=>n+(PIPS[v]||0),0)*.45;
+
+    if(x.number){
+      return s+(PIPS[x.number]||0);
+    }
+
+    if(x.resource==="lake"){
+      return (
+        s+
+        x.lakeNumbers.reduce(
+          (n,value)=>
+            n+(PIPS[value]||0),
+          0
+        )*.45
+      );
+    }
+
     return s;
   },0);
 }
-function roadExpansionScore(edgeId,playerId){
-  const e=game.board.edges[edgeId];
-  return vertexProductionScore(e.a)+vertexProductionScore(e.b)+Math.random()*2;
+
+function cpuRoadEndpointPotential(
+  vertexId,
+  playerId
+){
+  const vertex=
+    game.board.vertices[vertexId];
+
+  if(!vertex) return -9999;
+
+  let score=0;
+
+  if(!vertex.building){
+    const blockedByNeighbor=
+      vertexNeighbors(vertexId)
+        .some(neighborId=>
+          !!game.board.vertices[
+            neighborId
+          ].building
+        );
+
+    if(!blockedByNeighbor){
+      score +=
+        cpuVertexStrategicScore(
+          vertexId,
+          playerId
+        )*1.25+
+        7;
+    }
+  }
+
+  for(const edgeId of vertex.edges){
+    const edge=
+      game.board.edges[edgeId];
+
+    if(
+      !edge ||
+      edge.road!==null
+    ){
+      continue;
+    }
+
+    const farther=
+      otherEnd(
+        edgeId,
+        vertexId
+      );
+
+    if(
+      game.board.vertices[
+        farther
+      ]?.building
+    ){
+      continue;
+    }
+
+    score=
+      Math.max(
+        score,
+        cpuVertexStrategicScore(
+          farther,
+          playerId
+        )*.72
+      );
+  }
+
+  return score;
+}
+
+function roadExpansionScore(
+  edgeId,
+  playerId
+){
+  const edge=
+    game.board.edges[edgeId];
+
+  if(!edge) return -9999;
+
+  const player=
+    playerById(playerId);
+
+  let score=
+    cpuRoadEndpointPotential(
+      edge.a,
+      playerId
+    )+
+    cpuRoadEndpointPotential(
+      edge.b,
+      playerId
+    );
+
+  const ownRoadAtA=
+    game.board.vertices[
+      edge.a
+    ].edges.filter(
+      otherEdgeId=>
+        game.board.edges[
+          otherEdgeId
+        ].road===playerId
+    ).length;
+
+  const ownRoadAtB=
+    game.board.vertices[
+      edge.b
+    ].edges.filter(
+      otherEdgeId=>
+        game.board.edges[
+          otherEdgeId
+        ].road===playerId
+    ).length;
+
+  /*
+    既存道路網の端から外へ伸ばす街道を評価し、
+    同じ場所で枝分かれしすぎるのを少し抑える。
+  */
+  if(ownRoadAtA===1){
+    score+=5;
+  }else if(ownRoadAtA>=2){
+    score-=2;
+  }
+
+  if(ownRoadAtB===1){
+    score+=5;
+  }else if(ownRoadAtB>=2){
+    score-=2;
+  }
+
+  const longestLeader=
+    Math.max(
+      ...game.players.map(
+        other=>other.longestRoad||0
+      )
+    );
+
+  if(
+    player &&
+    player.longestRoad>=3 &&
+    player.longestRoad>=
+      longestLeader-2
+  ){
+    score+=5.5;
+  }
+
+  score+=Math.random()*.08;
+
+  return score;
+}
+
+function cpuBestRoadTarget(player){
+  const candidates=
+    Object.keys(game.board.edges)
+      .filter(edgeId=>
+        canPlaceRoad(
+          player.id,
+          edgeId
+        )
+      );
+
+  if(!candidates.length) return null;
+
+  candidates.sort(
+    (a,b)=>
+      roadExpansionScore(
+        b,
+        player.id
+      )-
+      roadExpansionScore(
+        a,
+        player.id
+      )
+  );
+
+  return {
+    id:candidates[0],
+    score:
+      roadExpansionScore(
+        candidates[0],
+        player.id
+      ),
+  };
 }
 
 function calculateLongestRoad(playerId){

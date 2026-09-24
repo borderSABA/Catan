@@ -1,144 +1,196 @@
-カタン：共通オンライン規格 移植メモ
-共通化バージョン：v1.43
-適用規格：オンラインボドゲ共通化_実装規格_v4
-
-[ADAPTER]
-GAME_ID = catan
-GAME_NAME = カタン
-MAX_PLAYERS = 6
-WORKER_ORIGIN = https://catan-online-server.naitoryo7110.workers.dev
-APP_VERSION = v1.43
-
-タイトル描画箇所 = github-pages/index.html / showLobbyScreen()
-ROOM一覧描画関数 = github-pages/online.js / renderRoomCards()
-ROOM参加関数 = github-pages/online.js / joinOnlineRoom()
-ゲーム開始関数 = github-pages/online.js / startOnlineGame()
-再接続関数 = github-pages/online.js / scheduleReconnect(), joinOnlineRoom(...,{reconnect:true})
-ROOM初期化関数 = github-pages/online.js / manualResetRoomFromTitle(), resetOnlineRoom()
-WorkerのROOMクラス/処理 = cloudflare-worker/src/index.js / CatanRoom
-Workerの保存関数 = cloudflare-worker/src/index.js / CatanRoom.save()
-参加者配列 = CatanRoom.state.members
-CPU配列 = ゲーム開始後の state.game.players 内 human=false のプレイヤー
-ゲーム状態 = CatanRoom.state.game / CatanRoom.state.phase
+ゲーム名：カタン
+共通化バージョン：v1.45
+GAME_ID：catan
+MAX_PLAYERS：6
+既存Worker URL：https://catan-online-server.naitoryo7110.workers.dev
+共通管理Worker：https://boardgame-hub-api.naitoryo7110.workers.dev
 
 [CLIENT]
+
 ファイル：index.html
-変更内容：
-・表示バージョンを v1.43 へ更新
-・名前入力 maxlength を32へ変更
+変更箇所：
+・タイトルのバージョンを v1.44 へ更新
+・プレイヤー名入力上限を共通仕様の32文字へ対応
 ・HOME／プレイ記録ボタンは追加していない
 
 ファイル：style.css
-変更内容：
-・ROOM一覧はPC 4列を維持
-・スマホは430px以下を含め2列×2段へ統一
-・ROOMカードの参加者名表示用スタイルを追加
+変更箇所：
+・ROOM 1～4をPC 4列へ固定
+・スマホ幅では2列×2段
+・ROOM状態／参加者名表示用の最小CSSを追加
+・ゲーム本編UIは変更していない
 
 ファイル：online.js
-変更関数／箇所：
-・共通定数
-  GAME_ID / GAME_NAME / MAX_PLAYERS / WORKER_ORIGIN / COMMON_MANAGER_URL /
-  COMMON_PLAYER_NAME_KEY / ROOM_IDS / APP_VERSION を規格に合わせて定義
-・commonSavedName()
-  boardgamePlayerName を初期表示候補として読む
-・saveCommonNameOnActualStart()
-  boardgamePlayerName は実ゲーム開始状態受信時だけ保存
-・tokenKey(), getToken()
-  ROOMごとの再接続tokenを使用
-・checkRoomJoin()
-  WebSocket接続前に /join-check を実行
-・renderRoomCards()
-  固定 ROOM 1～4、現在人数/6人、参加者名、待機中/ゲーム中、参加/再接続、個別初期化を表示
-・manualResetRoomFromTitle()
-  /reset-empty で指定ROOMだけ初期化
-・joinOnlineRoom()
-  空ROOMホスト確認後に接続。既存ROOMは通常参加。再接続tokenをclientIdとして継続利用
-・scheduleReconnect()
-  通信断、ページ復帰、online復帰時の再接続を既存方式へ接続
-・receiveRoomState()
-  gameSessionId付きplaying状態を受信した時だけ共通名保存
-・sendSettings(), startOnlineGame(), resetOnlineRoom()
-  actionIdを付与して共通化操作の二重送信を防止
-・initOnlineApp()
-  sessionStorage入力途中値 → 再接続用active name → boardgamePlayerName の順で名前を復元
-  visibilitychange / online 復帰時に再接続
+変更定数：
+・GAME_ID = "catan"
+・GAME_NAME = "カタン"
+・MAX_PLAYERS = 6
+・WORKER_ORIGIN = 既存 window.CATAN_SERVER_URL
+・COMMON_MANAGER_URL
+・COMMON_PLAYER_NAME_KEY = "boardgamePlayerName"
+・ROOM_IDS = room1～room4
+・APP_VERSION = "v1.44"
 
-変更していないもの：
-・game.js のゲームルール、CPUロジック、手番処理、盤面処理
-・既存Cloudflare Workers URL
-・ゲーム本編UI
+変更関数／追加関数：
+・commonSavedName()
+・saveCommonNameOnActualStart()
+・tokenKey()
+・getToken()
+・checkRoomJoin()
+・roomStatusLabel()
+・renderRoomCards()
+・resetRoom()
+・joinOnlineRoom()
+・receiveRoomState()
+・sendSettings()
+・startOnlineGame()
+・leaveOnlineRoom()
+・resetOnlineRoom()
+・initOnlineApp()
+・newActionId()
+
+変更内容：
+・共通プレイヤー名はゲーム開始状態受信時だけ保存
+・ROOM参加／入力時は boardgamePlayerName へ保存しない
+・sessionStorage は入力途中値だけ保持
+・ROOMごとの再接続tokenを使用
+・空ROOM参加前に /join-check
+・既存ROOMはホスト権限確認なし
+・ROOM個別初期化は /reset-empty
+・共通操作へ actionId を追加
+・既存再接続処理を維持してACTIVE_ROOM/ACTIVE_NAMEへ接続
+・既存ダイス復旧／ピン同期／ゲーム本編通信は維持
 
 [WORKER]
+
 ファイル：src/index.js
-変更関数／箇所：
-・共通定数
-  GAME_ID=catan / GAME_NAME=カタン / MAX_PLAYERS=6 /
-  DEFAULT_COMMON_MANAGER_URL を追加
-・commonBase(), parseJsonSafe(), checkHostPermission()
-  共通管理Workerの /api/host/check を使用
+追加定数：
+・GAME_ID
+・GAME_NAME
+・MAX_PLAYERS
+・DEFAULT_COMMON_MANAGER_URL
+
+追加共通関数：
+・commonBase()
+・parseJsonSafe()
+・checkHostPermission()
 ・writePlayRecord()
-  共通管理Workerの /api/play/start へ開始時だけ送信。通信結果unknown時も自動再送しない
-・freshRoom(), ensureState()
-  recordEpoch / gameSequence / recordAttempt / gameSessionId / startedAt /
-  playRecordStatus / processedActions を追加・既存ROOM状態へ補完
-・isDuplicateAction()
-  playerId + actionId で共通化操作の二重処理を防止
-・/join-check
-  既存tokenまたは1人以上いるROOMではホスト確認なし
-  完全な空ROOMだけ checkHostPermission() を実行
-・WebSocket新規参加
-  クライアント事前確認だけに依存せず、空ROOM時はWorker側でも再度ホスト確認
-  権限なし文言は「ホスト権限がありません」
-  権限確認失敗時だけ「ホスト権限を確認できません。」
-・/reset-empty
-  接続中の人間がいるROOMは409で拒否
-  指定ROOMだけ freshRoom() へ完全初期化
-・summary
-  ROOMカード表示用の参加者名を返す
 ・createPlayRecordForStart()
-  正式な start_game 成立時だけ recordId/gameSessionId を生成して1件送信
-・start_game
-  actionId重複防止後、playing確定→開始記録→状態配信
-・set_settings / reset_room
-  actionId重複防止を追加
-・WebSocket再接続
-  connectionIdを追加し、旧Socketのcloseが新接続を切断扱いにしないよう修正
+・isDuplicateAction()
+・cleanToken()
+
+変更関数：
+・freshRoom()
+・CatanRoom.ensureState()
+・CatanRoom.fetch()
+・CatanRoom.webSocketMessage()
+・resetRoomCompletely() は既存処理を利用
+
+変更内容：
+・GET /join-check を追加
+・POST /reset-empty を追加
+・WebSocket参加時にも空ROOMだけホスト権限を再確認
+・権限なし文言を「ホスト権限がありません」に統一
+・共通管理Worker接続失敗時は「ホスト権限を確認できません。」
+・既存ROOMへの一般参加はホスト確認を通さない
+・ゲーム開始正式成立後だけ /api/play/start を1回試行
+・recordEpoch / gameSequence / recordId / gameSessionId を使用
+・unknown時はプレイ記録を自動再送しない
+・processedActions により共通操作の二重送信を抑止
+・空ROOM個別初期化は接続中人間がいる場合409
+・完全初期化で記録状態／processedActionsも初期化
 
 ファイル：wrangler.jsonc
 変更内容：
-・既存設定を維持したまま COMMON_MANAGER_URL を vars に追加
+・既存設定を維持
+・vars.COMMON_MANAGER_URL を追加
+・Worker名は catan-online-server のまま
 
 ファイル：0_CHECK_SERVER.bat
-変更内容：
-・規格に合わせ新規追加
-・ASCIIのみ / BOMなし / CRLF / call経由 / 成否ともpause
+・ASCIIのみ
+・BOMなし
+・CRLF
+・npm/npxはcall経由
+・成功時／失敗時pause
 
 ファイル：1_DEPLOY_SERVER.bat
+・ASCIIのみ
+・BOMなし
+・CRLF
+・npm/npxはcall経由
+・成功時／失敗時pause
+
+[変更していない主要部分]
+
+・game.js のゲームルール
+・CPUロジック
+・カタン本編の進行
+・既存ダイス進行不能対策
+・盤面ピン
+・漁師
+・1920×1080調整
+・既存ゲームWorker URL
+
+[次回更新]
+
+最初にこの COMMON_PATCH_NOTES.txt を確認し、
+online.js / style.css / index.html / Worker src/index.js / wrangler.jsonc
+の上記接続点だけを確認してください。
+ゲーム本編全体の再解析は不要です。
+
+
+[CPU AI PATCH v1.45]
+
+CLIENT game.js
+変更関数／追加関数：
+・cpuDiscardHalf()
+・scheduleCpuDiscard()
+・resumeCpuDiscardIfNeeded()
+・cpuVertexStrategicScore()
+・cpuBestSettlementTarget()
+・cpuBestCityTarget()
+・cpuStrategicGoals()
+・cpuChooseGoal()
+・cpuResourceKeepValue()
+・cpuChooseDiscardResource()
+・cpuVictimScore()
+・cpuChooseVictimFromCandidates()
+・cpuBestRobberHexId()
+・robberTargetScore()
+・cpuMoveRobber()
+・cpuPlayYearOfPlenty()
+・cpuPlayMonopoly()
+・cpuPlayRoadBuilding()
+・cpuUseStrategicDevelopment()
+・cpuBuildPhase()
+・cpuTryBankTrade()
+・futureVertexScore()
+・setupVertexScore()
+・roadExpansionScore()
+・cpuBestRoadTarget()
+・cpuUseFish()
+
 変更内容：
-・ASCIIのみ / BOMなし / CRLF / npm,npxはcall経由 / 成否ともpause
+・CPU初期配置を資源バランス／出目／港／漁場基準へ改善
+・CPU建設優先順位を状況評価方式へ変更
+・CPU銀行／港交易を目標建設基準へ変更
+・CPU発展カードを状況に応じて使用
+・盗賊配置／強奪相手の優先順位を改善
+・CPUの7資源半減を戦略的かつ必ず実行
+・CPU破棄フェーズを独立タイマー化し、再同期後も復旧可能
+・漁師CPU判断を改善
 
-[IMPORTANT]
-・既存Worker URL： https://catan-online-server.naitoryo7110.workers.dev を変更していない
-・HOME／プレイ記録ボタンはタイトルにもゲーム中にも表示しない
-・boardgamePlayerName はROOM参加、入力、ページ表示では更新しない
-・プレイ記録はROOM参加、更新、再接続では送信しない
-・同じROOMで次ゲーム開始時は gameSequence を増加
-・ROOM完全初期化時は recordEpoch を再生成し記録状態と processedActions を初期化
+CLIENT online.js
+変更関数：
+・scheduleCpuIfNeeded()
 
-[CHECKED]
-・online.js JavaScript構文確認：OK
-・Worker index.js 構文確認：OK
-・Worker単体テスト：OK
-  - 空ROOM＋権限あり join-check 成功
-  - 空ROOM＋権限なし 403「ホスト権限がありません」
-  - 既存ROOM＋権限なし host checkなしで成功
-  - 接続中ROOMの reset-empty 拒否
-  - 空ROOMの reset-empty 成功
-  - start_game 時のみプレイ記録1件生成
-・既存Worker URL維持：OK
-・固定ROOM 1～4：OK
-・PC 4列 CSS：OK
-・スマホ 2列×2段 CSS：OK
-・boardgamePlayerName 書込み箇所が開始状態受信時だけ：OK
-・プレイ記録呼出し箇所が start_game だけ：OK
-・再接続token / active ROOM / visibility復帰処理：OK
+変更内容：
+・現在手番が人間でも、7のCPU破棄待ちならCPU破棄処理を再開
+・共通オンラインv4のROOM／再接続／ホスト／記録処理は変更なし
+
+WORKER
+・変更なし
+
+ゲームルール：
+・変更なし
+・1ターン1回の通常建設制限など既存ルールを維持

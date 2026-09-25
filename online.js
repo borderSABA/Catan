@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.54";
+const APP_VERSION = "v1.55";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;

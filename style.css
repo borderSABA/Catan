@@ -5112,7 +5112,7 @@ body.desktop-1080-fit
   }
 }
 
-/* v1.53 CPU解析データ */
+/* v1.54 CPU解析データ */
 .cpu-analysis-open-button{
   width:100%;
   margin-top:10px;
@@ -5228,7 +5228,7 @@ body.desktop-1080-fit
   }
 }
 
-/* v1.53 CPU解析サーバー保存 */
+/* v1.54 CPU解析サーバー保存 */
 .cpu-analysis-server-box{
   margin:14px 0;
   padding:12px;
@@ -5238,4 +5238,33 @@ body.desktop-1080-fit
 }
 .cpu-analysis-server-box .cpu-analysis-status{
   margin-top:0;
+}
+
+
+/* v1.54 進行復旧・再接続 */
+.saved-reconnect-button{
+  display:block;
+  width:min(360px,100%);
+  margin:10px auto 0;
+  border-color:#2563eb;
+  color:#1d4ed8;
+  font-weight:800;
+}
+.saved-reconnect-button.hidden,
+.saved-reconnect-button[hidden]{
+  display:none !important;
+}
+.progress-recovery-button{
+  white-space:nowrap;
+  border-color:#d97706 !important;
+  color:#92400e !important;
+  background:#fff7ed !important;
+}
+.progress-recovery-button:hover{
+  background:#ffedd5 !important;
+}
+body.desktop-1080-fit
+.online-game-controls
+.progress-recovery-button{
+  min-width:88px !important;
 }

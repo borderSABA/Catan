@@ -86,8 +86,8 @@ const CPU_ANALYSIS_DB_VERSION=1;
 const CPU_ANALYSIS_STORE="matches";
 const CPU_ANALYSIS_MAX_MATCHES=12;
 const CPU_ANALYSIS_MAX_EVENTS=12000;
-const CPU_ANALYSIS_APP_VERSION="v1.55";
-const CPU_ANALYSIS_LOGIC_VERSION="MAX_BEAM_V155_ROAD_BALANCE";
+const CPU_ANALYSIS_APP_VERSION="v1.54";
+const CPU_ANALYSIS_LOGIC_VERSION="MAX_BEAM_V149";
 const CPU_ANALYSIS_SERVER_COMPACT_VERSION=1;
 
 let cpuAnalysisSession=null;
@@ -286,7 +286,6 @@ function cpuAnalysisGoalSummary(player,goal,rank=null){
     contest:cpuAnalysisRound(contestAdjustment),
     distancePenalty:cpuAnalysisRound(-(goal.distance||0)*4.4),
     etaPenalty:cpuAnalysisRound(-(goal.eta||0)*7.2),
-    roadOpportunityPenalty:cpuAnalysisRound(-(goal.roadOpportunityPenalty||0)),
     lookahead:cpuAnalysisRound(lookaheadBonus),
   };
   return {
@@ -306,8 +305,6 @@ function cpuAnalysisGoalSummary(player,goal,rank=null){
     lookaheadScore:cpuAnalysisRound(goal.lookaheadScore),
     lookaheadBonus:cpuAnalysisRound(goal.lookaheadBonus),
     strategicScore:cpuAnalysisRound(goal.strategicScore),
-    planningVP:cpuAnalysisRound(cpuPlanningVP(player)),
-    hiddenVictoryPoints:cpuHiddenVictoryPointCount(player),
     scoreComponents,
     buildable:cpuGoalBuildable(player,goal),
     contest:goal.contest?cpuAnalysisClone(goal.contest):null,
@@ -1040,7 +1037,7 @@ function cpuAnalysisEnsureSession(player=null){
         goal:"base + boardScore*0.68 + outcomeValue + contestAdjustment - distance*4.4 - eta*7.2 + lookaheadBonus",
         lookaheadDepthNormal:4,
         lookaheadDepthEndgame:5,
-        note:"v1.55 CPU強化版。解析2戦を基に道路王争いの過大評価と終盤VP認識を調整。",
+        note:"v1.54進行復旧版。CPUロジック自体はv1.53から変更なし。",
       },
     },
     events:[],
@@ -4691,24 +4688,6 @@ function cpuGoalEta(
   return Math.min(20,eta);
 }
 
-function cpuHiddenVictoryPointCount(player){
-  if(!player?.dev) return 0;
-  return player.dev.reduce(
-    (count,card)=>count+(card==="vp"?1:0),
-    0
-  );
-}
-
-/*
-  CPU自身は手札の勝利点カードを知っているため、
-  勝ち筋評価では未公開VPも含める。
-  実際の勝利判定(totalVP/checkVictory)は従来ルールのまま。
-*/
-function cpuPlanningVP(player){
-  return (player?totalVP(player):0)+
-    cpuHiddenVictoryPointCount(player);
-}
-
 function cpuGoalProductionGain(player,goal){
   if(!goal) return 0;
 
@@ -4780,29 +4759,34 @@ function cpuGoalAwardValue(player,goal){
   }
 
   if(goal?.kind==="road"){
-    const plan=goal.roadAwardPlan||null;
-    const opponentMaximum=Math.max(
-      0,
-      ...game.players
-        .filter(other=>other.id!==player.id)
-        .map(other=>other.longestRoad||0)
-    );
+    const opponents=
+      game.players.filter(
+        other=>other.id!==player.id
+      );
 
-    /*
-      v1.55:
-      最長交易路は「近いだけ」で高評価にしない。
-      実際に+2VPを取れる道路列だけを明確に加点し、
-      すでに保持中の防衛は終盤かつ僅差時だけ小さく評価する。
-    */
-    if(plan?.awardGain>0){
-      value+=cpuPlanningVP(player)>=7?18:11;
-    }else if(
-      player.hasLongestRoad &&
-      plan?.wouldHold &&
-      opponentMaximum>=
-        (player.longestRoad||0)-1
+    const leader=
+      Math.max(
+        4,
+        ...opponents.map(
+          other=>other.longestRoad||0
+        )
+      );
+
+    const roadsToLead=
+      Math.max(
+        0,
+        leader+1-
+        (player.longestRoad||0)
+      );
+
+    if(
+      !player.hasLongestRoad &&
+      roadsToLead<=2
     ){
-      value+=cpuPlanningVP(player)>=8?8:3;
+      value+=
+        roadsToLead===1
+          ?16
+          :9;
     }
   }
 
@@ -4925,7 +4909,7 @@ function cpuGoalTacticalWinBonus(player,goal){
     Math.max(
       0,
       victoryTarget(player)-
-      cpuPlanningVP(player)
+      totalVP(player)
     );
 
   if(
@@ -4936,7 +4920,7 @@ function cpuGoalTacticalWinBonus(player,goal){
     return 260;
   }
 
-  if(cpuPlanningVP(player)>=7){
+  if(totalVP(player)>=7){
     return gain*34;
   }
 
@@ -4944,7 +4928,7 @@ function cpuGoalTacticalWinBonus(player,goal){
 }
 
 function cpuGoalOutcomeValue(player,goal){
-  const points=cpuPlanningVP(player);
+  const points=publicVP(player);
   let value=0;
 
   if(
@@ -4991,58 +4975,6 @@ function cpuGoalOutcomeValue(player,goal){
     );
 
   return value;
-}
-
-function cpuRoadOpportunityPenalty(player,goal){
-  if(!player || goal?.kind!=="road") return 0;
-
-  /* 開拓地へ向かう街道は必要経費なので原則ここでは罰しない。 */
-  if(goal.expansionTargetId){
-    const extra=Math.max(0,(goal.roadsNeeded||1)-3);
-    return extra*5;
-  }
-
-  const plan=goal.roadAwardPlan||null;
-  if(plan?.immediateWin) return 0;
-
-  const opponentMaximum=Math.max(
-    0,
-    ...game.players
-      .filter(other=>other.id!==player.id)
-      .map(other=>other.longestRoad||0)
-  );
-
-  let penalty=0;
-
-  if(plan?.awardGain>0){
-    const length=Math.max(1,plan.sequence?.length||1);
-    const margin=(plan.projectedLongest||0)-opponentMaximum;
-
-    /* 2点を取れても、複数本必要・奪い返されやすいなら割引。 */
-    penalty+=Math.max(0,length-1)*15;
-    if(margin<=0) penalty+=22;
-    else if(margin===1) penalty+=12;
-
-    penalty+=Math.max(0,player.roads.length-7)*4.5;
-  }else{
-    /*
-      VPにも開拓にも直結しない街道を強く抑える。
-      特に既に最長交易路を持っている時の延長競争を止める。
-    */
-    penalty+=20;
-    penalty+=Math.max(0,player.roads.length-6)*6;
-    if(player.hasLongestRoad) penalty+=28;
-  }
-
-  /* 開拓地駒を使い切っているなら都市・発展カードへ寄せる。 */
-  if(
-    player.pieces.settlement<=0 &&
-    player.settlements.length>0
-  ){
-    penalty+=18;
-  }
-
-  return penalty;
 }
 
 function cpuGoalKey(goal){
@@ -5514,7 +5446,7 @@ function cpuPlannerMacros(player,goals){
       else if(knightGap===1) devUtility+=11;
       else if(knightGap===2) devUtility+=5;
     }
-    if(cpuPlanningVP(player)>=7) devUtility+=9;
+    if(publicVP(player)>=7) devUtility+=9;
 
     macros.push({
       key:"dev",
@@ -5535,25 +5467,12 @@ function cpuPlannerMacros(player,goals){
       Math.min(4,player.pieces.road)
     );
 
-  const roadDefenseThreat=
-    player.hasLongestRoad &&
-    Math.max(
-      0,
-      ...game.players
-        .filter(other=>other.id!==player.id)
-        .map(other=>other.longestRoad||0)
-    )>=
-      (player.longestRoad||0)-1;
-
   if(
     roadSequence?.sequence?.length &&
     (
       roadSequence.awardGain>0 ||
-      (
-        roadDefenseThreat &&
-        cpuPlanningVP(player)>=8 &&
-        roadSequence.sequence.length===1
-      )
+      roadSequence.projectedLongest>=
+        Math.max(4,(player.longestRoad||0)+2)
     )
   ){
     const cost=emptyResourceCounts();
@@ -5573,10 +5492,9 @@ function cpuPlannerMacros(player,goals){
       vpGain:roadSequence.awardGain||0,
       rateGain:emptyResourceCounts(),
       utility:
-        (roadSequence.awardGain||0)*30+
-        (roadDefenseThreat?8:0)-
-        roadSequence.sequence.length*8-
-        Math.max(0,player.roads.length-7)*4,
+        roadSequence.projectedLongest*2.8+
+        (roadSequence.awardGain||0)*36-
+        roadSequence.sequence.length*3,
       unique:true,
     });
   }
@@ -5827,12 +5745,12 @@ function cpuLookaheadScores(player,goals){
   };
 
   const depthLimit=
-    cpuPlanningVP(player)>=7
+    totalVP(player)>=7
       ?5
       :4;
 
   const beamWidth=
-    cpuPlanningVP(player)>=7
+    totalVP(player)>=7
       ?16
       :12;
 
@@ -5924,7 +5842,7 @@ function cpuApplyLookaheadToGoals(player,goals){
   );
 
   const endgame=
-    cpuPlanningVP(player)>=7;
+    totalVP(player)>=7;
 
   return goals.map(goal=>{
     const value=
@@ -6024,7 +5942,7 @@ function cpuStrategicGoals(player){
 
   const goals=[];
 
-  const points=cpuPlanningVP(player);
+  const points=publicVP(player);
   const profile=cpuStrategyProfile(player);
 
   const expansions=
@@ -6216,12 +6134,6 @@ function cpuStrategicGoals(player){
       goal
     );
 
-    const roadOpportunityPenalty=
-      cpuRoadOpportunityPenalty(
-        player,
-        goal
-      );
-
     let contestAdjustment=0;
 
     if(goal.contest){
@@ -6237,13 +6149,11 @@ function cpuStrategicGoals(player){
       distance,
       eta,
       outcomeValue,
-      roadOpportunityPenalty,
       strategicScore:
         goal.base+
         goal.boardScore*.68+
         outcomeValue+
         contestAdjustment-
-        roadOpportunityPenalty-
         distance*4.4-
         eta*7.2,
     };
@@ -10939,7 +10849,7 @@ function roadExpansionScore(
     player.longestRoad>=
       longestLeader-2
   ){
-    score+=1.8;
+    score+=5.5;
   }
 
   score+=cpuStableTie(`road:${edgeId}:${playerId}`)*.025;
@@ -10958,7 +10868,7 @@ function cpuBestRoadSequence(player,maxDepth=4){
 
   const effectiveDepth=Math.min(
     maxDepth,
-    cpuPlanningVP(player)>=7 ? 4 : 3
+    totalVP(player)>=7 ? 4 : 3
   );
 
   const roadStateSignature=[
@@ -11033,7 +10943,7 @@ function cpuBestRoadSequence(player,maxDepth=4){
 
     const immediateWin=
       awardGain>0 &&
-      cpuPlanningVP(player)+awardGain>=
+      totalVP(player)+awardGain>=
         victoryTarget(player);
 
     const defenseValue=
@@ -11184,55 +11094,29 @@ function cpuBestRoadTarget(player){
       Math.min(4,player.pieces.road)
     );
 
-  const opponentMaximum=Math.max(
-    0,
-    ...game.players
-      .filter(other=>other.id!==player.id)
-      .map(other=>other.longestRoad||0)
-  );
-
   /*
-    v1.55:
-    最長交易路を取れる道路は評価するが、roadSequence内部の巨大な
-    探索スコアをそのままboardScoreへ流さない。
-    2VPの価値・必要本数・奪還リスクを正規化した値へ変換する。
+    勝利、または2手以内で最長交易路を取れるなら
+    開拓用道路より先に検討する。
   */
   if(
     awardPlan?.sequence?.length &&
-    awardPlan.awardGain>0
-  ){
-    const length=awardPlan.sequence.length;
-    const margin=
-      (awardPlan.projectedLongest||0)-
-      opponentMaximum;
-    const reclaimPenalty=
-      margin<=0?22:
-      margin===1?12:0;
-    const existingRoadPenalty=
-      Math.max(0,player.roads.length-7)*4;
-
-    if(
+    awardPlan.awardGain>0 &&
+    (
       awardPlan.immediateWin ||
-      length<=2 ||
-      cpuPlanningVP(player)>=8
-    ){
-      return {
-        id:awardPlan.sequence[0],
-        score:
-          (awardPlan.immediateWin?170:62)+
-          awardPlan.awardGain*20-
-          Math.max(0,length-1)*12-
-          reclaimPenalty-
-          existingRoadPenalty,
-        awardGain:awardPlan.awardGain,
-        roadAwardPlan:awardPlan,
-      };
-    }
+      awardPlan.sequence.length<=2 ||
+      totalVP(player)>=7
+    )
+  ){
+    return {
+      id:awardPlan.sequence[0],
+      score:
+        90+
+        awardPlan.score,
+      awardGain:awardPlan.awardGain,
+      roadAwardPlan:awardPlan,
+    };
   }
 
-  /*
-    開拓へつながる道路を、単なる道路王延長より先に検討する。
-  */
   const expansion=
     cpuBestExpansionPlan(player);
 
@@ -11255,26 +11139,17 @@ function cpuBestRoadTarget(player){
     };
   }
 
-  /*
-    既に最長交易路を保持している場合、僅差かつ終盤だけ1本道路で防衛。
-    それ以外の「長くするだけ」の道路は候補から外す。
-  */
-  const defenseThreat=
-    player.hasLongestRoad &&
-    opponentMaximum>=
-      (player.longestRoad||0)-1;
-
   if(
-    defenseThreat &&
-    cpuPlanningVP(player)>=8 &&
-    awardPlan?.sequence?.length===1 &&
+    awardPlan?.sequence?.length &&
     awardPlan.projectedLongest>
       (player.longestRoad||0)
   ){
     return {
       id:awardPlan.sequence[0],
-      score:46,
-      awardGain:0,
+      score:
+        30+
+        awardPlan.score*.42,
+      awardGain:awardPlan.awardGain||0,
       roadAwardPlan:awardPlan,
     };
   }
@@ -11311,12 +11186,9 @@ function cpuBestRoadTarget(player){
   return {
     id:candidates[0],
     score:
-      Math.min(
-        32,
-        roadExpansionScore(
-          candidates[0],
-          player.id
-        )*.35
+      roadExpansionScore(
+        candidates[0],
+        player.id
       ),
     awardGain:0,
   };

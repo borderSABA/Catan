@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.49";
+const APP_VERSION = "v1.50";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -159,6 +159,66 @@ function isLocalTurn(){
 function isOnlineHost(){
   return onlineRoomState?.hostId===onlineClientId;
 }
+
+/*
+  v1.50: game_state は「その瞬間にゲーム状態を書き換える権限がある端末」
+  だけが送信する。
+
+  以前は全端末が render() のたびに game_state を送っていたため、
+  CPU処理が高速に進んだ直後へ別端末の古いstateが到着し、
+  初期配置や直前ターンへ巻き戻ることがあった。
+*/
+function gameStateWriterClientIdFromRoomState(state=onlineRoomState){
+  const roomGame=state?.game;
+  if(!roomGame || state?.phase!=="playing") return null;
+
+  const players=Array.isArray(roomGame.players)
+    ?roomGame.players
+    :[];
+
+  const playerClientId=playerId=>{
+    const player=players.find(item=>item?.id===playerId);
+    if(!player) return null;
+    return player.human
+      ?(player.clientId||null)
+      :(state.hostId||null);
+  };
+
+  // 人間同士のオンライン交易回答は、提案を受けた側だけが確定する。
+  if(roomGame.pendingTrade?.toId!==undefined && roomGame.pendingTrade?.toId!==null){
+    return playerClientId(roomGame.pendingTrade.toId);
+  }
+
+  // 7の資源破棄は現在手番とは別プレイヤーが処理する。
+  if(
+    roomGame.phase==="discard" &&
+    roomGame.discardPlayerId!==undefined &&
+    roomGame.discardPlayerId!==null
+  ){
+    return playerClientId(roomGame.discardPlayerId);
+  }
+
+  // 漁師拡張の交換待ち。
+  if(
+    roomGame.phase==="fishSwap" &&
+    roomGame.fishSwapPlayerId!==undefined &&
+    roomGame.fishSwapPlayerId!==null
+  ){
+    return playerClientId(roomGame.fishSwapPlayerId);
+  }
+
+  const current=players[roomGame.current]||null;
+  if(!current) return state.hostId||null;
+
+  return current.human
+    ?(current.clientId||null)
+    :(state.hostId||null);
+}
+
+function canLocalSubmitGameState(){
+  if(!ONLINE_MODE || !onlineRoomState) return false;
+  return gameStateWriterClientIdFromRoomState(onlineRoomState)===onlineClientId;
+}
 function scheduleCpuIfNeeded(){
   /*
     7の資源半減は現在手番とは別プレイヤーが処理するため、
@@ -230,10 +290,34 @@ function onlineAfterRender(){
   if(!ONLINE_MODE || !game || applyingRemoteState || suppressOnlineSync) return;
   handleOnlinePendingUI();
   if(!onlineRoomState || onlineRoomState.phase!=="playing") return;
+
+  /*
+    v1.50: 現在の権限端末だけがゲーム状態を送る。
+    これにより観戦側・待機側の古いstateによる巻き戻りを防ぐ。
+  */
+  if(!canLocalSubmitGameState()) return;
+
+  /*
+    各送信候補へ単調増加revisionを付与する。
+    自分が送った少し古いstateがWorkerから返ってきても、
+    現在のローカル状態より古ければ再適用しない。
+  */
+  game.syncRevision=(Number(game.syncRevision)||0)+1;
+
   clearTimeout(onlineSyncTimer);
   onlineSyncTimer=setTimeout(()=>{
-    if(applyingRemoteState || suppressOnlineSync || !game) return;
-    onlineSend({type:"game_state",game:cloneGameForNetwork()});
+    if(
+      applyingRemoteState ||
+      suppressOnlineSync ||
+      !game ||
+      !canLocalSubmitGameState()
+    ) return;
+
+    onlineSend({
+      type:"game_state",
+      game:cloneGameForNetwork(),
+      syncRevision:Number(game.syncRevision)||0,
+    });
   },35);
 }
 
@@ -260,7 +344,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室するROOMを選択してください。現在の版：v1.49");
+    showOnlineMessage("入室するROOMを選択してください。現在の版：v1.50");
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -937,8 +1021,27 @@ function receiveRoomState(state){
 
   renderOnlineLobby();
   if(state.phase==="playing" && state.game){
-    applyingRemoteState=true;
     const hadActiveGame=!!game;
+    const remoteSyncRevision=Number(state.game.syncRevision)||0;
+    const localSyncRevision=Number(game?.syncRevision)||0;
+
+    /*
+      v1.50: 同じrevision、またはそれより古いstateはゲーム本体へ再適用しない。
+      onlineRoomState自体は上で更新済みなので、ホスト交代や接続状態などの
+      ROOMメタ情報はそのまま追従する。
+    */
+    const shouldApplyGame=
+      !hadActiveGame ||
+      remoteSyncRevision>localSyncRevision;
+
+    if(!shouldApplyGame){
+      handleOnlinePendingUI();
+      scheduleCpuIfNeeded();
+      requestStaleDiceRecovery();
+      return;
+    }
+
+    applyingRemoteState=true;
     game=state.game;
     if(!Array.isArray(game.logHistory)) game.logHistory=[];
     if(!Array.isArray(game.discardQueue)) game.discardQueue=[];
@@ -1148,6 +1251,7 @@ function startOnlineGame(){
 
   game.online=true;
   game.roomId=onlineRoomState.roomId;
+  game.syncRevision=1;
   game.pendingTrade=null;
   game.resolvedTradeIds=[];
   locallyResolvedTradeIds.clear();

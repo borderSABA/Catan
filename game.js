@@ -16,6 +16,10 @@ const PIPS = {2:1,3:2,4:3,5:4,6:5,8:5,9:4,10:3,11:2,12:1};
 const TILE_IMAGE_PATH = "assets/tiles";
 const FISH_ACTION_COST = {removeRobber:2,steal:3,resource:4,road:5,dev:7};
 
+// v1.50: CPUの「見える行動」同士は2秒空ける。
+// AI内部の評価計算には待機を入れず、盤面を変える処理だけを間引く。
+const CPU_ACTION_DELAY_MS = 2000;
+
 const svg = document.getElementById("board");
 const NS = "http://www.w3.org/2000/svg";
 const $ = (id) => document.getElementById(id);
@@ -1869,7 +1873,8 @@ function resolveDiceRoll(playerId,dice,afterResolve){
   produce(sum);
   render();
   if(typeof afterResolve==="function" && game.phase==="turn" && !game.winner){
-    setTimeout(afterResolve,280);
+    const delay=p?.human ?280:CPU_ACTION_DELAY_MS;
+    setTimeout(afterResolve,delay);
   }
 }
 
@@ -5091,7 +5096,7 @@ function scheduleCpuDiscard(
     cpuDiscardScheduledKey=null;
 
     processDiscardQueue();
-  },260);
+  },CPU_ACTION_DELAY_MS);
 
   return true;
 }
@@ -5257,7 +5262,7 @@ function beginRobberMove(){
   log(`${playerById(game.robberMover).name}が🐱を移動します。`);
   render();
   if(!playerById(game.robberMover).human && (!ONLINE_MODE || isOnlineHost())){
-    setTimeout(()=>cpuMoveRobber(game.robberMover),260);
+    setTimeout(()=>cpuMoveRobber(game.robberMover),CPU_ACTION_DELAY_MS);
   }
 }
 
@@ -5347,14 +5352,21 @@ function finishRobberMove(playerId,victimId=null){
   }
 
   if(typeof continuation==="function"){
-    setTimeout(continuation,280);
+    const mover=playerById(playerId);
+    setTimeout(
+      continuation,
+      mover?.human ?280:CPU_ACTION_DELAY_MS
+    );
   }else if(
     resumeCpuBuild &&
     game.current===playerId &&
     !playerById(playerId).human &&
     (!ONLINE_MODE || isOnlineHost())
   ){
-    setTimeout(()=>cpuBuildPhase(playerById(playerId)),280);
+    setTimeout(
+      ()=>cpuBuildPhase(playerId,"fish"),
+      CPU_ACTION_DELAY_MS
+    );
   }
 }
 
@@ -6980,12 +6992,13 @@ function robberHurtsPlayer(player){
   if(game.robberHex===null) return false;
   return game.board.hexes[game.robberHex].corners.some(vid=>game.board.vertices[vid].building?.player===player.id);
 }
-function cpuUseFish(player){
-  if(!game.fishermen) return;
+function cpuUseFish(player,maxActions=3){
+  if(!game.fishermen) return 0;
 
   let actions=0;
+  const actionLimit=Math.max(1,Number(maxActions)||1);
 
-  while(actions<3){
+  while(actions<actionLimit){
     /*
       自分の生産地が盗賊で止められているなら
       まず2匹で追放する。
@@ -7190,6 +7203,8 @@ function cpuUseFish(player){
 
     break;
   }
+
+  return actions;
 }
 
 function removeDevCard(player,card){
@@ -7384,7 +7399,7 @@ function scheduleCpu(){
 
     cpuScheduledKey=null;
     cpuAct();
-  },450);
+  },CPU_ACTION_DELAY_MS);
 }
 
 function cpuAct(){
@@ -7438,8 +7453,13 @@ function cpuAct(){
     advanceSetup(); return;
   }
   if(game.phase==="moveRobber"){
-    cpuMoveRobber(p.id);
-    cpuTimer=setTimeout(()=>cpuBuildPhase(p),300);
+    const playerId=p.id;
+    cpuMoveRobber(playerId);
+    clearTimeout(cpuTimer);
+    cpuTimer=setTimeout(
+      ()=>cpuBuildPhase(playerId,"fish"),
+      CPU_ACTION_DELAY_MS
+    );
     return;
   }
   if(game.phase!=="turn"){
@@ -7449,143 +7469,250 @@ function cpuAct(){
 
   cpuActionRunning=true;
 
+  const playerId=p.id;
+
   if(game.fishermen){
-    cpuTransferBoot(p);
-    if(game.winner) return;
+    const movedBoot=cpuTransferBoot(p);
+    if(game.winner){
+      cpuActionRunning=false;
+      return;
+    }
+
+    if(movedBoot){
+      render();
+      clearTimeout(cpuTimer);
+      cpuTimer=setTimeout(()=>{
+        cpuTimer=null;
+        const current=playerById(playerId);
+        if(
+          !game ||
+          game.winner ||
+          !current ||
+          current.human ||
+          game.current!==playerId
+        ){
+          cpuActionRunning=false;
+          return;
+        }
+        animateDiceRoll(
+          playerId,
+          ()=>cpuBuildPhase(playerId,"fish")
+        );
+      },CPU_ACTION_DELAY_MS);
+      return;
+    }
   }
-  animateDiceRoll(p.id,()=>cpuBuildPhase(p));
+
+  animateDiceRoll(
+    playerId,
+    ()=>cpuBuildPhase(playerId,"fish")
+  );
 }
 
-function cpuBuildPhase(p){
+function scheduleCpuBuildStep(playerId,stage,delay=CPU_ACTION_DELAY_MS){
+  clearTimeout(cpuTimer);
+  cpuTimer=setTimeout(()=>{
+    cpuTimer=null;
+
+    const player=playerById(playerId);
+    if(
+      !game ||
+      game.winner ||
+      !player ||
+      player.human ||
+      game.current!==playerId
+    ){
+      cpuActionRunning=false;
+      return;
+    }
+
+    cpuBuildPhase(playerId,stage);
+  },delay);
+}
+
+function cpuBuildPhase(playerOrId,stage="fish"){
+  const playerId=
+    typeof playerOrId==="object"
+      ?playerOrId?.id
+      :playerOrId;
+
+  const p=playerById(playerId);
+
   if(
+    !game ||
     game.winner ||
-    game.current!==p.id
+    !p ||
+    p.human ||
+    game.current!==playerId
   ){
     cpuActionRunning=false;
     return;
   }
 
-  cpuUseFish(p);
-
-  checkVictory();
-
-  if(game.winner){
-    cpuActionRunning=false;
-    render();
-    return;
-  }
-
-  const devResult=
-    cpuUseStrategicDevelopment(p);
-
-  if(devResult==="finished"){
-    cpuActionRunning=false;
-    render();
-    return;
-  }
-
-  if(devResult==="knight"){
-    return;
-  }
+  cpuActionRunning=true;
 
   /*
-    v1.49:
-    交易・銀行交換・建設がすべて同じ長期目標を参照する。
-    「都市のために交易した直後に道路を建てる」ような
-    目標ブレを抑える。
+    v1.50:
+    1回の呼び出しで「盤面を変える行動」は最大1種類だけ実行する。
+    実際に何かした時だけ2秒待って次段階へ進む。
+    評価・候補探索などの内部計算には待機を入れない。
   */
-  let goal=
-    cpuChooseGoal(p);
+  let currentStage=stage;
 
-  if(!p.builtThisTurn){
-    cpuTryPlayerTrade(p);
-    goal=cpuChooseGoal(p);
-  }
+  while(true){
+    if(currentStage==="fish"){
+      const fishActions=cpuUseFish(p,1);
+      checkVictory();
 
-  /*
-    「何か建てられる」ではなく、
-    「現在の目標を建てられる」まで銀行・港交易を検討する。
-  */
-  for(
-    let attempt=0;
-    attempt<5 &&
-    !p.builtThisTurn &&
-    goal &&
-    !cpuGoalBuildable(p,goal);
-    attempt++
-  ){
-    if(!cpuTryBankTrade(p)){
-      break;
+      if(game.winner){
+        cpuActionRunning=false;
+        render();
+        return;
+      }
+
+      if(fishActions>0){
+        updateAwards();
+        render();
+        scheduleCpuBuildStep(playerId,"fish");
+        return;
+      }
+
+      currentStage="dev";
+      continue;
     }
 
-    goal=cpuChooseGoal(p);
-  }
+    if(currentStage==="dev"){
+      const devResult=cpuUseStrategicDevelopment(p);
 
-  if(
-    !p.builtThisTurn &&
-    goal &&
-    cpuGoalBuildable(p,goal)
-  ){
-    cpuExecuteGoal(p,goal);
-  }
+      if(devResult==="finished"){
+        cpuActionRunning=false;
+        render();
+        return;
+      }
 
-  /*
-    目標資源を崩してまで毎ターン無理に建てない。
-    ただし8枚以上で7の破棄リスクが高い場合だけ、
-    戦略点が近い建設候補へ資源圧縮として逃がす。
-  */
-  if(
-    !p.builtThisTurn &&
-    totalResources(p)>=8
-  ){
-    const goals=
-      cpuStrategicGoals(p);
+      // 騎士は盗賊移動を含むため、cpuPlayKnight側で続きを予約する。
+      if(devResult==="knight"){
+        return;
+      }
 
-    const primaryScore=
-      goal?.strategicScore??-Infinity;
+      if(devResult==="action"){
+        updateAwards();
+        checkVictory();
+        render();
 
-    const emergency=
-      goals.find(candidate=>
-        cpuGoalBuildable(
-          p,
-          candidate
-        ) &&
-        candidate.strategicScore>=
-          primaryScore-18
-      );
+        if(game.winner){
+          cpuActionRunning=false;
+          return;
+        }
 
-    if(emergency){
-      cpuExecuteGoal(
-        p,
-        emergency
-      );
+        scheduleCpuBuildStep(playerId,"dev");
+        return;
+      }
+
+      currentStage="trade";
+      continue;
     }
-  }
 
-  updateAwards();
-  checkVictory();
-  render();
+    if(currentStage==="trade"){
+      if(
+        !p.builtThisTurn &&
+        cpuTryPlayerTrade(p)
+      ){
+        render();
+        scheduleCpuBuildStep(playerId,"bank");
+        return;
+      }
 
-  if(!game.winner){
-    clearTimeout(cpuTimer);
+      currentStage="bank";
+      continue;
+    }
 
-    cpuTimer=setTimeout(()=>{
-      cpuTimer=null;
+    if(currentStage==="bank"){
+      const goal=cpuChooseGoal(p);
 
+      if(
+        !p.builtThisTurn &&
+        goal &&
+        !cpuGoalBuildable(p,goal) &&
+        cpuTryBankTrade(p)
+      ){
+        render();
+        scheduleCpuBuildStep(playerId,"bank");
+        return;
+      }
+
+      currentStage="build";
+      continue;
+    }
+
+    if(currentStage==="build"){
+      let goal=cpuChooseGoal(p);
+      let built=false;
+
+      if(
+        !p.builtThisTurn &&
+        goal &&
+        cpuGoalBuildable(p,goal)
+      ){
+        built=cpuExecuteGoal(p,goal);
+      }
+
+      /*
+        目標資源を崩してまで毎ターン無理に建てない。
+        ただし8枚以上で7の破棄リスクが高い場合だけ、
+        戦略点が近い建設候補へ資源圧縮として逃がす。
+      */
+      if(
+        !built &&
+        !p.builtThisTurn &&
+        totalResources(p)>=8
+      ){
+        const goals=cpuStrategicGoals(p);
+        const primaryScore=goal?.strategicScore??-Infinity;
+
+        const emergency=goals.find(candidate=>
+          cpuGoalBuildable(p,candidate) &&
+          candidate.strategicScore>=primaryScore-18
+        );
+
+        if(emergency){
+          built=cpuExecuteGoal(p,emergency);
+        }
+      }
+
+      updateAwards();
+      checkVictory();
+      render();
+
+      if(game.winner){
+        cpuActionRunning=false;
+        return;
+      }
+
+      // 建設をした場合も、何も建てなかった場合もターン終了前に2秒置く。
+      scheduleCpuBuildStep(playerId,"finish");
+      return;
+    }
+
+    if(currentStage==="finish"){
+      const current=playerById(playerId);
       if(
         !game ||
         game.winner ||
-        game.current!==p.id ||
-        p.human
+        !current ||
+        current.human ||
+        game.current!==playerId
       ){
         cpuActionRunning=false;
         return;
       }
 
       finishActivePhase();
-    },450);
-  }else{
-    cpuActionRunning=false;
+      return;
+    }
+
+    // 不明な段階は安全側でターン終了へ。
+    currentStage="finish";
   }
 }
 
@@ -8017,75 +8144,35 @@ function cpuPlayRoadBuilding(p){
 
 function cpuUseStrategicDevelopment(p){
   /*
-    勝利点カードは勝利に必要な分だけ公開する。
+    v1.50: 1回の呼び出しにつき発展カード系の見える行動は1つだけ。
+    次のカード判断は2秒後に再評価する。
   */
-  const vpCount=
-    usableDevCount(
-      p,
-      "vp"
-    );
+  const vpCount=usableDevCount(p,"vp");
+  const neededForWin=Math.max(0,victoryTarget(p)-totalVP(p));
 
-  const neededForWin=
-    Math.max(
-      0,
-      victoryTarget(p)-
-      totalVP(p)
-    );
-
-  if(
-    vpCount>0 &&
-    neededForWin>0 &&
-    neededForWin<=vpCount
-  ){
-    for(
-      let count=0;
-      count<neededForWin &&
-      !game.winner;
-      count++
-    ){
-      cpuPlayVictoryPoint(p);
-    }
-
-    if(game.winner){
-      return "finished";
-    }
+  if(vpCount>0 && neededForWin>0 && neededForWin<=vpCount){
+    cpuPlayVictoryPoint(p);
+    return game.winner ?"finished":"action";
   }
 
-  /*
-    いま欲しい建設物まで1～2枚不足なら
-    発見で完成させる。
-  */
   if(cpuCanYearOfPlentyHelp(p)){
-    cpuPlayYearOfPlenty(p);
+    if(cpuPlayYearOfPlenty(p)){
+      return "action";
+    }
   }
 
-  /*
-    他プレイヤーに十分な枚数が集まっている時だけ
-    独占を使用する。
-  */
-  cpuPlayMonopoly(p);
+  if(cpuPlayMonopoly(p)){
+    return "action";
+  }
 
-  /*
-    無料街道で実際に伸ばせる時だけ使う。
-  */
   const goal=cpuChooseGoal(p);
-
   const roadBuildingPlan=
-    usableDevCount(
-      p,
-      "roadBuilding"
-    )>0
-      ?cpuBestRoadSequence(
-        p,
-        Math.min(2,p.pieces.road)
-      )
+    usableDevCount(p,"roadBuilding")>0
+      ?cpuBestRoadSequence(p,Math.min(2,p.pieces.road))
       :null;
 
   if(
-    usableDevCount(
-      p,
-      "roadBuilding"
-    )>0 &&
+    usableDevCount(p,"roadBuilding")>0 &&
     (
       goal?.kind==="road" ||
       roadBuildingPlan?.awardGain>0 ||
@@ -8094,17 +8181,12 @@ function cpuUseStrategicDevelopment(p){
         !cpuBestSettlementTarget(p) &&
         roadBuildingPlan?.sequence?.length
       )
-    )
+    ) &&
+    cpuPlayRoadBuilding(p)
   ){
-    cpuPlayRoadBuilding(p);
+    return "action";
   }
 
-  /*
-    騎士は、盗賊を自分から退けたい時、
-    または最大騎士団を取れる時を優先。
-    騎士だけは盗賊移動で非同期に続くため、
-    使用した場合は呼び出し元を一度終了する。
-  */
   if(cpuShouldPlayKnight(p)){
     cpuPlayKnight(p);
     return "knight";
@@ -8116,24 +8198,58 @@ function cpuUseStrategicDevelopment(p){
 function cpuPlayKnight(p){
   const idx=p.dev.indexOf("knight");
   if(idx<0) return;
+
   p.dev.splice(idx,1);
   queueAwardEvent("devKnight",p.id);
   p.knightsPlayed++;
   updateAwards();
   log(`${p.name}が騎士を使いました。`);
-  game.phase="moveRobber"; game.robberMover=p.id;
-  cpuMoveRobber(p.id);
+
+  game.phase="moveRobber";
+  game.robberMover=p.id;
+
+  const playerId=p.id;
   render();
+
+  // 騎士使用 → 2秒 → 盗賊移動 → 2秒 → 残りのCPU行動。
   clearTimeout(cpuTimer);
   cpuTimer=setTimeout(()=>{
     cpuTimer=null;
-    if(!game || game.winner || game.current!==p.id || p.human){
+
+    const current=playerById(playerId);
+    if(
+      !game ||
+      game.winner ||
+      game.current!==playerId ||
+      !current ||
+      current.human ||
+      game.phase!=="moveRobber"
+    ){
       cpuActionRunning=false;
       return;
     }
-    cpuBuildPhase(p);
-  },300);
+
+    cpuMoveRobber(playerId);
+
+    clearTimeout(cpuTimer);
+    cpuTimer=setTimeout(()=>{
+      cpuTimer=null;
+      const latest=playerById(playerId);
+      if(
+        !game ||
+        game.winner ||
+        game.current!==playerId ||
+        !latest ||
+        latest.human
+      ){
+        cpuActionRunning=false;
+        return;
+      }
+      cpuBuildPhase(playerId,"dev");
+    },CPU_ACTION_DELAY_MS);
+  },CPU_ACTION_DELAY_MS);
 }
+
 function usableDevCount(p,card){
   return p.dev.filter(c=>c===card).length;
 }

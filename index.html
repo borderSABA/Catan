@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.53（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.53">
+  <title>カタン オンライン v1.55（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.55">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.53</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.55</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -24,6 +24,7 @@
         <div id="onlineConnectionMessage" class="online-message">部屋を選択してください。</div>
         <div id="roomCards" class="room-cards"></div>
         <button id="refreshRoomsBtn" class="secondary online-refresh">部屋情報を更新</button>
+        <button id="reconnectSavedGameBtn" type="button" class="secondary saved-reconnect-button hidden" hidden>対戦へ再接続</button>
         <button type="button" class="secondary cpu-analysis-open-button" data-open-cpu-analysis>CPU解析データ</button>
       </div>
 
@@ -70,13 +71,14 @@
   <div id="desktopFitStage" class="desktop-fit-stage">
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.53</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.55</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
       <button id="desktopPingBtn" class="secondary desktop-ping-button">📍ピン</button>
       <button id="desktopLogBtn" class="secondary desktop-log-button">ログ</button>
       <button type="button" class="secondary desktop-analysis-button" data-open-cpu-analysis>CPU解析</button>
+      <button id="progressRecoveryBtn" type="button" class="secondary progress-recovery-button" title="停止したCPU処理や保留中の操作画面を安全に再開します">⟳ 進行復旧</button>
       <button
         id="desktop1080FitBtn"
         class="secondary desktop-1080-fit-button"
@@ -357,8 +359,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.53"></script>
-  <script src="online.js?version=v1.53"></script>
-  <script src="game.js?version=v1.53"></script>
+  <script src="config.js?version=v1.55"></script>
+  <script src="online.js?version=v1.55"></script>
+  <script src="game.js?version=v1.55"></script>
 </body>
 </html>

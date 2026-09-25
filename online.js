@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.53";
+const APP_VERSION = "v1.55";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -42,6 +42,15 @@ let roomRefreshTimer = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let diceRecoveryRequestedFor = null;
+
+// v1.54: CPU/自動進行が止まった時の監視。
+// 人間の通常思考待ちや、人間が回答すべき魚/破棄/交易待ちは対象外。
+let progressWatchdogTimer = null;
+let progressWatchdogSignature = "";
+let progressWatchdogChangedAt = Date.now();
+let progressWatchdogRecoveredSignature = null;
+const PROGRESS_WATCHDOG_INTERVAL_MS = 3000;
+const PROGRESS_WATCHDOG_STALE_MS = 10000;
 
 let commonNameSavedForSession = null;
 let roomJoinInFlight = false;
@@ -246,6 +255,24 @@ function scheduleCpuIfNeeded(){
     return;
   }
 
+  /*
+    v1.54:
+    CPUのダイス後に人間の魚交換へ移った場合、CPU側では
+    cpuActionRunning=true のままタイマーが無い状態になる。
+    魚処理完了後に phase=turn / rolled=true へ戻った時だけ、
+    この「取り残されたロック」を解除して続きから再開する。
+  */
+  if(
+    game.phase==="turn" &&
+    game.rolled &&
+    cpuActionRunning &&
+    !cpuTimer &&
+    !game.diceRolling
+  ){
+    cpuActionRunning=false;
+    cpuScheduledKey=null;
+  }
+
   if(game.diceRolling || cpuActionRunning) return;
 
   if(
@@ -256,6 +283,373 @@ function scheduleCpuIfNeeded(){
   }
 }
 
+
+
+function savedReconnectTarget(){
+  const roomId=localStorage.getItem(ACTIVE_ROOM_KEY)||"";
+  const name=String(
+    localStorage.getItem(ACTIVE_NAME_KEY) ||
+    commonSavedName() ||
+    sessionStorage.getItem(NAME_DRAFT_KEY) ||
+    ""
+  ).trim().slice(0,32);
+
+  if(
+    !ROOM_IDS.includes(roomId) ||
+    !name ||
+    !hasRoomToken(roomId)
+  ){
+    return null;
+  }
+
+  return {roomId,name};
+}
+
+function updateReconnectSavedGameButton(){
+  const button=$("reconnectSavedGameBtn");
+  if(!button) return;
+
+  const target=savedReconnectTarget();
+  const connected=
+    !!onlineRoomId &&
+    !!onlineSocket &&
+    (
+      onlineSocket.readyState===WebSocket.OPEN ||
+      onlineSocket.readyState===WebSocket.CONNECTING
+    );
+
+  const alreadyUsable=
+    connected &&
+    onlineRoomId===target?.roomId &&
+    (
+      !!game ||
+      onlineRoomState?.phase==="lobby"
+    );
+
+  button.hidden=!target || alreadyUsable;
+  button.classList.toggle("hidden",button.hidden);
+
+  if(target){
+    const roomNo=ROOM_IDS.indexOf(target.roomId)+1;
+    button.textContent=`ROOM ${roomNo} の対戦へ再接続`;
+  }
+}
+
+async function reconnectSavedGame(options={}){
+  const target=savedReconnectTarget();
+
+  if(!target){
+    showOnlineMessage(
+      "再接続できる対戦情報がこの端末に残っていません。",
+      true
+    );
+    updateReconnectSavedGameButton();
+    return false;
+  }
+
+  $("onlinePlayerName").value=target.name;
+
+  if(options.force){
+    roomJoinInFlight=false;
+  }
+
+  await joinOnlineRoom(
+    target.roomId,
+    {
+      reconnect:true,
+      name:target.name,
+      force:!!options.force,
+    }
+  );
+
+  updateReconnectSavedGameButton();
+  return true;
+}
+
+function progressRecoverySignature(){
+  if(!game) return "no-game";
+
+  const pendingTrade=game.pendingTrade
+    ?`${game.pendingTrade.id||""}:${game.pendingTrade.toId??""}`
+    :"";
+
+  return [
+    Number(game.syncRevision)||0,
+    game.turnSerial||0,
+    game.turnNo||0,
+    game.current??"",
+    game.phase||"",
+    game.rolled?1:0,
+    game.diceRolling?1:0,
+    game.freeRoads||0,
+    game.discardPlayerId??"",
+    game.fishSwapPlayerId??"",
+    Array.isArray(game.pendingFishDraws)
+      ?game.pendingFishDraws.length
+      :0,
+    pendingTrade,
+    game.robberMover??"",
+    game.winner??"",
+  ].join("|");
+}
+
+function localAutoProgressExpected(){
+  if(
+    !game ||
+    game.winner ||
+    !isOnlineHost()
+  ){
+    return false;
+  }
+
+  if(game.diceRolling){
+    return !!currentPlayer() && !currentPlayer().human;
+  }
+
+  if(game.phase==="discard"){
+    const player=playerById(game.discardPlayerId);
+    return !!player && !player.human;
+  }
+
+  if(game.phase==="fishSwap"){
+    const player=playerById(game.fishSwapPlayerId);
+    return !!player && !player.human;
+  }
+
+  if(game.phase==="moveRobber"){
+    const player=playerById(
+      game.robberMover??game.current
+    );
+    return !!player && !player.human;
+  }
+
+  if(
+    game.phase==="setupSettlement" ||
+    game.phase==="setupRoad"
+  ){
+    return !!currentPlayer() && !currentPlayer().human;
+  }
+
+  if(game.phase==="turn"){
+    const current=currentPlayer();
+    if(!current || current.human) return false;
+
+    // 人間への回答待ちは停止ではないので勝手に進めない。
+    if(game.pendingTrade){
+      const receiver=playerById(game.pendingTrade.toId);
+      if(receiver?.human) return false;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+function clearCpuProgressLocks(){
+  clearTimeout(cpuTimer);
+  cpuTimer=null;
+  cpuScheduledKey=null;
+  cpuActionRunning=false;
+}
+
+function recoverGameProgress(options={}){
+  const manual=!!options.manual;
+  const source=manual?"手動":"自動";
+
+  if(!game){
+    if(manual){
+      reconnectSavedGame({force:true});
+    }
+    return false;
+  }
+
+  // 人間側の保留UIを見失った場合は再表示できるようキーを解除する。
+  if(manual){
+    const local=localPlayer();
+
+    if(
+      game.phase==="fishSwap" &&
+      game.fishSwapPlayerId===local?.id
+    ){
+      shownFishSwapKey=null;
+    }
+
+    if(
+      game.phase==="discard" &&
+      game.discardPlayerId===local?.id
+    ){
+      discardSelection=null;
+    }
+
+    if(
+      game.pendingTrade?.toId===local?.id
+    ){
+      shownPendingTradeId=null;
+    }
+  }
+
+  handleOnlinePendingUI();
+
+  if(game.winner) return false;
+
+  if(game.diceRolling && !game.rolled){
+    if(manual){
+      log(`${source}進行復旧：停止したダイス処理の復旧を要求しました。`);
+      render();
+    }
+    requestStaleDiceRecovery(true);
+    return true;
+  }
+
+  if(game.phase==="discard"){
+    if(
+      typeof resumeCpuDiscardIfNeeded==="function" &&
+      resumeCpuDiscardIfNeeded()
+    ){
+      if(manual){
+        log(`${source}進行復旧：CPUの資源破棄処理を再開しました。`);
+        render();
+      }
+      return true;
+    }
+
+    handleOnlinePendingUI();
+    return false;
+  }
+
+  if(game.phase==="fishSwap"){
+    const swapPlayer=playerById(game.fishSwapPlayerId);
+
+    if(swapPlayer?.human){
+      // 人間の回答待ちは勝手に処理しない。
+      handleOnlinePendingUI();
+      if(manual && isLocalPlayer(swapPlayer)){
+        log("進行復旧：魚チップの引き直し画面を再表示しました。");
+        render();
+      }
+      return false;
+    }
+
+    if(isOnlineHost()){
+      clearCpuProgressLocks();
+      processFishDrawQueue();
+      scheduleCpuIfNeeded();
+      if(manual){
+        log("進行復旧：CPUの魚チップ処理を再開しました。");
+        render();
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  const current=currentPlayer();
+
+  if(
+    current &&
+    !current.human &&
+    isOnlineHost()
+  ){
+    clearCpuProgressLocks();
+
+    /*
+      game.rolled=true の場合でも scheduleCpu→cpuAct が
+      v1.54ではダイスを振り直さずダイス後処理から再開する。
+    */
+    scheduleCpuIfNeeded();
+
+    if(manual){
+      log(
+        `進行復旧：${current.name}の`+
+        `${game.rolled?"ダイス後処理":"手番処理"}を再開しました。`
+      );
+      render();
+    }
+
+    return true;
+  }
+
+  // 人間手番では状態を飛ばさず操作UIだけ復元する。
+  if(current?.human){
+    handleOnlinePendingUI();
+
+    if(manual){
+      log("進行復旧：現在の人間手番の操作画面を再表示しました。");
+    }
+
+    render();
+  }
+
+  return false;
+}
+
+function manualRecoverProgress(){
+  const socketOpen=
+    onlineSocket?.readyState===WebSocket.OPEN;
+
+  if(!socketOpen){
+    reconnectSavedGame({force:true});
+    return;
+  }
+
+  recoverGameProgress({manual:true});
+}
+
+function tickProgressWatchdog(){
+  if(!game){
+    progressWatchdogSignature="no-game";
+    progressWatchdogChangedAt=Date.now();
+    progressWatchdogRecoveredSignature=null;
+    updateReconnectSavedGameButton();
+    return;
+  }
+
+  // 人間の保留UIが消えた場合は定期的に復元する。
+  handleOnlinePendingUI();
+
+  const signature=progressRecoverySignature();
+
+  if(signature!==progressWatchdogSignature){
+    progressWatchdogSignature=signature;
+    progressWatchdogChangedAt=Date.now();
+    progressWatchdogRecoveredSignature=null;
+    return;
+  }
+
+  if(!localAutoProgressExpected()){
+    progressWatchdogChangedAt=Date.now();
+    progressWatchdogRecoveredSignature=null;
+    return;
+  }
+
+  if(
+    Date.now()-progressWatchdogChangedAt <
+    PROGRESS_WATCHDOG_STALE_MS
+  ){
+    return;
+  }
+
+  if(progressWatchdogRecoveredSignature===signature){
+    return;
+  }
+
+  progressWatchdogRecoveredSignature=signature;
+  recoverGameProgress({manual:false});
+}
+
+function startProgressWatchdog(){
+  clearInterval(progressWatchdogTimer);
+  progressWatchdogSignature="";
+  progressWatchdogChangedAt=Date.now();
+  progressWatchdogRecoveredSignature=null;
+
+  progressWatchdogTimer=setInterval(
+    tickProgressWatchdog,
+    PROGRESS_WATCHDOG_INTERVAL_MS
+  );
+}
 
 function analysisAdminName(){
   return String(
@@ -623,6 +1017,8 @@ function renderRoomCards(rooms){
         );
       });
     });
+
+  updateReconnectSavedGameButton();
 }
 
 async function resetRoom(roomId) {
@@ -742,7 +1138,7 @@ function scheduleOnlineReconnect(delay=null){
   },wait);
 }
 
-function requestStaleDiceRecovery(){
+function requestStaleDiceRecovery(force=false){
   if(!game?.diceRolling || game.rolled) return;
 
   const key=
@@ -756,6 +1152,7 @@ function requestStaleDiceRecovery(){
     Number(game.diceRollStartedAt)||0;
 
   const stale=
+    force ||
     !startedAt ||
     Date.now()-startedAt>=3000;
 
@@ -774,7 +1171,10 @@ async function joinOnlineRoom(
 ){
   if(!ROOM_IDS.includes(roomId)) return;
 
+  const force=!!options.force;
+
   if(
+    !force &&
     onlineSocket &&
     onlineRoomId===roomId &&
     (
@@ -915,6 +1315,7 @@ async function joinOnlineRoom(
       "接続中",
       "connected"
     );
+    updateReconnectSavedGameButton();
   });
 
   socket.addEventListener("message",event=>{
@@ -969,6 +1370,7 @@ async function joinOnlineRoom(
       "切断",
       "disconnected"
     );
+    updateReconnectSavedGameButton();
 
     if(onlineRoomId){
       scheduleOnlineReconnect();
@@ -983,6 +1385,7 @@ async function joinOnlineRoom(
       "接続エラー",
       "disconnected"
     );
+    updateReconnectSavedGameButton();
   });
 }
 
@@ -1042,6 +1445,7 @@ function showLobbyScreen(){
   }
 
   document.title=`カタン オンライン ${APP_VERSION}（ロビー）`;
+  updateReconnectSavedGameButton();
   window.scrollTo(0,0);
 }
 
@@ -1089,6 +1493,7 @@ function showGameScreen(){
 function receiveRoomState(state){
   onlineRoomState=state;
   onlineRoomId=state.roomId;
+  updateReconnectSavedGameButton();
 
   const started=
     state.phase==="playing" ||
@@ -1465,6 +1870,7 @@ function leaveOnlineRoom(){
   $("gameHeader").classList.add("hidden");
   $("gameMain").classList.add("hidden");
   setSocketState("未接続","disconnected");
+  updateReconnectSavedGameButton();
   fetchRoomSummaries();
 }
 
@@ -1523,6 +1929,14 @@ function initOnlineApp(){
 
   $("onlinePlayerName").value=nameDraft;
   $("refreshRoomsBtn").addEventListener("click",fetchRoomSummaries);
+  $("reconnectSavedGameBtn")?.addEventListener(
+    "click",
+    ()=>reconnectSavedGame({force:true})
+  );
+  $("progressRecoveryBtn")?.addEventListener(
+    "click",
+    manualRecoverProgress
+  );
   $("leaveRoomLobbyBtn").addEventListener("click",leaveOnlineRoom);
   $("leaveRoomGameBtn").addEventListener("click",leaveOnlineRoom);
   $("returnLobbyBtn").addEventListener("click",resetOnlineRoom);
@@ -1543,6 +1957,9 @@ function initOnlineApp(){
     }
   );
 
+  updateReconnectSavedGameButton();
+  startProgressWatchdog();
+
   fetchRoomSummaries();
   roomRefreshTimer=setInterval(()=>{
     if(!onlineRoomId) fetchRoomSummaries();
@@ -1561,7 +1978,9 @@ function initOnlineApp(){
   const activeName=
     localStorage.getItem(
       ACTIVE_NAME_KEY
-    )||"";
+    )||
+    commonSavedName()||
+    "";
 
   const roomToJoin=
     ROOM_IDS.includes(requestedRoom)

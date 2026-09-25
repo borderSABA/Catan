@@ -1,0 +1,60 @@
+v1.52 CPU解析機能 検証結果
+==========================
+
+1. JavaScript構文
+   game.js   : node --check 合格
+   online.js : node --check 合格
+
+2. CPU戦スモークテスト
+   ・3人 標準：勝利まで完走
+   ・4人 標準：勝利まで完走
+   ・5人 漁師：勝利まで完走
+   ・6人 漁師：勝利まで完走
+   ・資源/駒の負数なし
+   ・7の破棄、盗賊、交易、建設、発展カードを含む進行を確認
+
+3. 解析イベント
+   以下を実戦で生成確認
+   ・setup_settlement_decision
+   ・setup_road_decision
+   ・turn_start
+   ・goal_decision
+   ・player_trade_decision
+   ・bank_trade_decision
+   ・development_decision
+   ・robber_decision
+   ・discard_decision
+   ・fish_decision（漁師戦）
+   ・cpu_action
+
+4. スコア表
+   goal_decisionに選択候補と非選択候補を保存。
+   base / board / outcome / contest / distancePenalty /
+   etaPenalty / lookaheadBonus / lookaheadScore / strategicScoreを確認。
+   CSV生成も確認。
+
+5. ゲームへの非干渉
+   固定乱数列でv1.51とv1.52を同条件4CPU対戦させ、
+   以下が完全一致：
+   ・勝者
+   ・ターン数
+   ・全ダイス履歴
+   ・ゲームログ
+   ・最終資源
+   ・街道/開拓地/都市
+   ・発展カード状態
+   ・最長交易路/最大騎士団
+
+6. オンライン同期
+   CPU解析データはgameへ格納していないため、ネットワークstateへ入りません。
+   Cloudflare Workerフォルダはv1.51から完全無変更。
+   online.jsの機能変更は版番号表示のみ。
+
+7. データ量
+   テスト例：
+   ・3人標準 約1.5MB
+   ・4人標準 約3MB前後
+   ・5人漁師 約3.2MB
+   ・6人漁師 約4～5MB
+   対戦内容により変動します。
+   最新12対戦まで保持します。

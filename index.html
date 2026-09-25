@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.50（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.50">
+  <title>カタン オンライン v1.52（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.52">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.50</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.52</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -24,6 +24,7 @@
         <div id="onlineConnectionMessage" class="online-message">部屋を選択してください。</div>
         <div id="roomCards" class="room-cards"></div>
         <button id="refreshRoomsBtn" class="secondary online-refresh">部屋情報を更新</button>
+        <button type="button" class="secondary cpu-analysis-open-button" data-open-cpu-analysis>CPU解析データ</button>
       </div>
 
       <div id="joinedRoomView" class="hidden">
@@ -69,12 +70,13 @@
   <div id="desktopFitStage" class="desktop-fit-stage">
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.50</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.52</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
       <button id="desktopPingBtn" class="secondary desktop-ping-button">📍ピン</button>
       <button id="desktopLogBtn" class="secondary desktop-log-button">ログ</button>
+      <button type="button" class="secondary desktop-analysis-button" data-open-cpu-analysis>CPU解析</button>
       <button
         id="desktop1080FitBtn"
         class="secondary desktop-1080-fit-button"
@@ -312,6 +314,27 @@
     </div>
   </div>
 
+  <div id="cpuAnalysisModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="cpuAnalysisTitle">
+    <div class="cpu-analysis-dialog">
+      <div class="cpu-analysis-heading">
+        <div>
+          <h2 id="cpuAnalysisTitle">CPU解析データ</h2>
+          <p>CPUが選んだ行動だけでなく、選ばなかった候補・評価点・ETA・先読み補正・交易候補までローカル保存します。</p>
+        </div>
+        <button id="cpuAnalysisCloseBtn" type="button" class="secondary cpu-analysis-close" aria-label="CPU解析を閉じる">×</button>
+      </div>
+      <div id="cpuAnalysisStatus" class="cpu-analysis-status">解析データを確認中...</div>
+      <div class="cpu-analysis-main-actions">
+        <button id="cpuAnalysisExportLatestJson" type="button">最新対戦 JSON</button>
+        <button id="cpuAnalysisExportLatestCsv" type="button" class="secondary">最新スコア表 CSV</button>
+        <button id="cpuAnalysisExportAllJson" type="button" class="secondary">全対戦 JSON</button>
+        <button id="cpuAnalysisClearAll" type="button" class="danger">全データ削除</button>
+      </div>
+      <p class="cpu-analysis-guide">私に渡す場合は <strong>JSON</strong> が最も詳しく解析できます。CSVは候補スコアを表計算ソフトで見る用途です。</p>
+      <div id="cpuAnalysisMatchList" class="cpu-analysis-match-list"></div>
+    </div>
+  </div>
+
   <div id="awardAnnouncement" class="award-announcement hidden" aria-live="assertive" aria-atomic="true">
     <div id="awardAnnouncementCard" class="award-announcement-card">
       <div id="awardAnnouncementPlayer" class="award-announcement-player"></div>
@@ -324,8 +347,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.50"></script>
-  <script src="online.js?version=v1.50"></script>
-  <script src="game.js?version=v1.50"></script>
+  <script src="config.js?version=v1.52"></script>
+  <script src="online.js?version=v1.52"></script>
+  <script src="game.js?version=v1.52"></script>
 </body>
 </html>

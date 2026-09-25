@@ -75,6 +75,857 @@ function keyPoint(x,y){ return `${Math.round(x*10)/10},${Math.round(y*10)/10}`; 
 function edgeKey(a,b){ return a < b ? `${a}|${b}` : `${b}|${a}`; }
 function deepClone(x){ return JSON.parse(JSON.stringify(x)); }
 
+// v1.52: CPU解析データ。
+// 対戦中のCPU判断をローカルだけへ保存し、オンラインstateには混ぜない。
+// JSONは詳細解析用、CSVは各候補のスコア比較用。
+const CPU_ANALYSIS_SCHEMA_VERSION=1;
+const CPU_ANALYSIS_DB_NAME="catan-cpu-analysis";
+const CPU_ANALYSIS_DB_VERSION=1;
+const CPU_ANALYSIS_STORE="matches";
+const CPU_ANALYSIS_MAX_MATCHES=12;
+const CPU_ANALYSIS_MAX_EVENTS=12000;
+const CPU_ANALYSIS_APP_VERSION="v1.52";
+
+let cpuAnalysisSession=null;
+let cpuAnalysisEventSeq=0;
+let cpuAnalysisPersistTimer=null;
+let cpuAnalysisEventsSincePersist=0;
+let cpuAnalysisLastPersistAt=0;
+const cpuAnalysisDedupeKeys=new Set();
+
+function cpuAnalysisNowIso(){
+  return new Date().toISOString();
+}
+
+function cpuAnalysisRound(value,digits=3){
+  if(!Number.isFinite(value)) return null;
+  const factor=10**digits;
+  return Math.round(value*factor)/factor;
+}
+
+function cpuAnalysisClone(value){
+  if(value===undefined) return null;
+  try{
+    return JSON.parse(JSON.stringify(value));
+  }catch(_error){
+    return null;
+  }
+}
+
+function cpuAnalysisBoardSignature(){
+  if(!game?.board) return "none";
+  return game.board.hexes.map(hex=>[
+    hex.id,
+    hex.resource,
+    hex.number??"",
+    (hex.lakeNumbers||[]).join("."),
+  ].join(":" )).join("|");
+}
+
+function cpuAnalysisBoardSnapshot(){
+  if(!game?.board) return null;
+  return {
+    large:!!game.board.large,
+    numberStart:game.board.numberStart??null,
+    hexes:game.board.hexes.map(hex=>({
+      id:hex.id,
+      q:hex.q,
+      r:hex.r,
+      resource:hex.resource,
+      number:hex.number??null,
+      lakeNumbers:hex.lakeNumbers?[...hex.lakeNumbers]:null,
+      corners:[...hex.corners],
+    })),
+    vertices:Object.values(game.board.vertices).map(vertex=>({
+      id:vertex.id,
+      hexes:[...vertex.hexes],
+      edges:[...vertex.edges],
+    })),
+    edges:Object.values(game.board.edges).map(edge=>({
+      id:edge.id,
+      a:edge.a,
+      b:edge.b,
+      hexes:[...edge.hexes],
+      harbor:edge.harbor??null,
+    })),
+    fishingGrounds:(game.board.fishingGrounds||[]).map(ground=>({
+      id:ground.id,
+      vertexId:ground.vertexId,
+      number:ground.number,
+    })),
+  };
+}
+
+function cpuAnalysisResourceRates(player){
+  if(!player || !game) return null;
+  return Object.fromEntries(
+    RESOURCES.map(resource=>[
+      resource,
+      cpuAnalysisRound(cpuResourceExpectedPerTurn(player,resource),4),
+    ])
+  );
+}
+
+function cpuAnalysisPlayerSnapshot(player,detailed=true){
+  if(!player || !game) return null;
+  const base={
+    id:player.id,
+    name:player.name,
+    human:!!player.human,
+    publicVP:publicVP(player),
+    totalVP:totalVP(player),
+    victoryTarget:victoryTarget(player),
+    resources:{...player.resources},
+    resourceTotal:totalResources(player),
+    pieces:{...player.pieces},
+    roads:[...player.roads],
+    settlements:[...player.settlements],
+    cities:[...player.cities],
+    knightsPlayed:player.knightsPlayed||0,
+    revealedVP:player.revealedVP||0,
+    longestRoad:player.longestRoad||0,
+    hasLongestRoad:!!player.hasLongestRoad,
+    hasLargestArmy:!!player.hasLargestArmy,
+    builtThisTurn:!!player.builtThisTurn,
+  };
+  if(!detailed) return base;
+  const devCounts={};
+  for(const card of player.dev||[]){
+    devCounts[card]=(devCounts[card]||0)+1;
+  }
+  return {
+    ...base,
+    expectedPerTurn:cpuAnalysisResourceRates(player),
+    devCounts,
+    fishTokens:[...(player.fishTokens||[])],
+    cpuPlan:cpuAnalysisClone(player.cpuPlan),
+  };
+}
+
+
+function cpuAnalysisStateSnapshot(focusPlayer=null,full=false){
+  if(!game) return null;
+  return {
+    turnSerial:game.turnSerial,
+    turnNo:game.turnNo,
+    current:game.current,
+    phase:game.phase,
+    rolled:!!game.rolled,
+    dice:[...(game.turnDice||game.dice||[])],
+    robberHex:game.robberHex??null,
+    oldBootHolder:game.oldBootHolder??null,
+    bank:{...game.bank},
+    devDeckRemaining:game.devDeck?.length??0,
+    focusPlayerId:focusPlayer?.id??null,
+    players:game.players.map(player=>
+      cpuAnalysisPlayerSnapshot(
+        player,
+        full || player.id===focusPlayer?.id
+      )
+    ),
+  };
+}
+
+
+function cpuAnalysisDescribeVertex(vertexId){
+  const vertex=game?.board?.vertices?.[vertexId];
+  if(!vertex) return null;
+  return {
+    id:vertexId,
+    hexes:vertex.hexes.map(hexId=>{
+      const hex=game.board.hexes[hexId];
+      return {
+        id:hexId,
+        resource:hex?.resource??null,
+        number:hex?.number??null,
+        lakeNumbers:hex?.lakeNumbers?[...hex.lakeNumbers]:null,
+      };
+    }),
+    harbors:vertex.edges
+      .map(edgeId=>game.board.edges[edgeId]?.harbor)
+      .filter(Boolean),
+    fishingGrounds:(game.board.fishingGrounds||[])
+      .filter(ground=>ground.vertexId===vertexId)
+      .map(ground=>ground.number),
+    building:cpuAnalysisClone(vertex.building),
+  };
+}
+
+function cpuAnalysisDescribeEdge(edgeId){
+  const edge=game?.board?.edges?.[edgeId];
+  if(!edge) return null;
+  return {
+    id:edgeId,
+    a:edge.a,
+    b:edge.b,
+    harbor:edge.harbor??null,
+    road:edge.road??null,
+    endpointA:cpuAnalysisDescribeVertex(edge.a),
+    endpointB:cpuAnalysisDescribeVertex(edge.b),
+  };
+}
+
+function cpuAnalysisGoalSummary(player,goal,rank=null){
+  if(!goal) return null;
+  const contestAdjustment=goal.contest
+    ?goal.contest.urgencyBonus*.75-
+      goal.contest.hopelessPenalty*.85+
+      (goal.denialBonus||0)*.75
+    :0;
+  const lookaheadBonus=Number.isFinite(goal.lookaheadBonus)
+    ?goal.lookaheadBonus
+    :0;
+  const scoreComponents={
+    base:cpuAnalysisRound(goal.base||0),
+    board:cpuAnalysisRound((goal.boardScore||0)*.68),
+    outcome:cpuAnalysisRound(goal.outcomeValue||0),
+    contest:cpuAnalysisRound(contestAdjustment),
+    distancePenalty:cpuAnalysisRound(-(goal.distance||0)*4.4),
+    etaPenalty:cpuAnalysisRound(-(goal.eta||0)*7.2),
+    lookahead:cpuAnalysisRound(lookaheadBonus),
+  };
+  return {
+    rank,
+    key:cpuGoalKey(goal),
+    kind:goal.kind,
+    targetId:goal.targetId??null,
+    expansionTargetId:goal.expansionTargetId??null,
+    roadsNeeded:goal.roadsNeeded??null,
+    cost:cpuAnalysisClone(goal.cost),
+    planCost:cpuAnalysisClone(cpuGoalPlanCost(goal)),
+    missing:cpuAnalysisRound(goal.missing),
+    distance:cpuAnalysisRound(goal.distance),
+    eta:cpuAnalysisRound(goal.eta),
+    boardScore:cpuAnalysisRound(goal.boardScore||0),
+    outcomeValue:cpuAnalysisRound(goal.outcomeValue||0),
+    lookaheadScore:cpuAnalysisRound(goal.lookaheadScore),
+    lookaheadBonus:cpuAnalysisRound(goal.lookaheadBonus),
+    strategicScore:cpuAnalysisRound(goal.strategicScore),
+    scoreComponents,
+    buildable:cpuGoalBuildable(player,goal),
+    contest:goal.contest?cpuAnalysisClone(goal.contest):null,
+    denialBonus:cpuAnalysisRound(goal.denialBonus||0),
+    roadAwardPlan:goal.roadAwardPlan?cpuAnalysisClone(goal.roadAwardPlan):null,
+  };
+}
+
+function cpuAnalysisMakeMatchId(){
+  const suffix=(
+    typeof crypto!=="undefined" &&
+    typeof crypto.randomUUID==="function"
+  )
+    ?crypto.randomUUID().replace(/-/g,"").slice(0,10)
+    :`${Date.now()}-${cpuAnalysisEventSeq}`;
+  return `catan-${Date.now()}-${suffix}`;
+}
+
+function cpuAnalysisEnsureSession(player=null){
+  if(!game || !game.players?.some(other=>!other.human)) return null;
+  const boardSignature=cpuAnalysisBoardSignature();
+  if(
+    cpuAnalysisSession &&
+    cpuAnalysisSession.meta?.boardSignature===boardSignature &&
+    cpuAnalysisSession.meta?.roomId===(game.roomId??null) &&
+    (
+      !cpuAnalysisSession.result ||
+      game.winner!==null
+    )
+  ){
+    return cpuAnalysisSession;
+  }
+
+  cpuAnalysisDedupeKeys.clear();
+  cpuAnalysisEventSeq=0;
+  cpuAnalysisEventsSincePersist=0;
+  cpuAnalysisLastPersistAt=Date.now();
+  cpuAnalysisSession={
+    schemaVersion:CPU_ANALYSIS_SCHEMA_VERSION,
+    appVersion:CPU_ANALYSIS_APP_VERSION,
+    matchId:cpuAnalysisMakeMatchId(),
+    startedAt:cpuAnalysisNowIso(),
+    updatedAt:cpuAnalysisNowIso(),
+    meta:{
+      roomId:game.roomId??null,
+      playerCount:game.playerCount,
+      fishermen:!!game.fishermen,
+      boardSignature,
+      board:cpuAnalysisBoardSnapshot(),
+      players:game.players.map(other=>({
+        id:other.id,
+        name:other.name,
+        human:!!other.human,
+      })),
+      scoringFormula:{
+        goal:"base + boardScore*0.68 + outcomeValue + contestAdjustment - distance*4.4 - eta*7.2 + lookaheadBonus",
+        lookaheadDepthNormal:4,
+        lookaheadDepthEndgame:5,
+        note:"v1.52時点のCPU評価式。選択されなかった候補も保存。",
+      },
+    },
+    events:[],
+    result:null,
+  };
+  cpuAnalysisRecordEvent(
+    "match_start",
+    player,
+    {
+      state:cpuAnalysisStateSnapshot(player,true),
+    },
+    `match-start:${cpuAnalysisSession.matchId}`
+  );
+  cpuAnalysisPersistSession(false);
+  return cpuAnalysisSession;
+}
+
+function cpuAnalysisRecordEvent(type,player,data={},dedupeKey=null){
+  const session=cpuAnalysisEnsureSession(player);
+  if(!session) return null;
+  if(dedupeKey && cpuAnalysisDedupeKeys.has(dedupeKey)) return null;
+  if(dedupeKey) cpuAnalysisDedupeKeys.add(dedupeKey);
+  if(session.events.length>=CPU_ANALYSIS_MAX_EVENTS){
+    if(!session._truncated){
+      session._truncated=true;
+      session.events.push({
+        seq:++cpuAnalysisEventSeq,
+        at:cpuAnalysisNowIso(),
+        type:"analysis_truncated",
+        turnSerial:game?.turnSerial??null,
+        turnNo:game?.turnNo??null,
+        message:`CPU解析イベントが${CPU_ANALYSIS_MAX_EVENTS}件を超えたため以降を省略`,
+      });
+    }
+    return null;
+  }
+  const event={
+    seq:++cpuAnalysisEventSeq,
+    at:cpuAnalysisNowIso(),
+    type,
+    turnSerial:game?.turnSerial??null,
+    turnNo:game?.turnNo??null,
+    phase:game?.phase??null,
+    currentPlayerId:game?.current??null,
+    playerId:player?.id??null,
+    playerName:player?.name??null,
+    data:cpuAnalysisClone(data),
+  };
+  session.events.push(event);
+  session.updatedAt=event.at;
+  cpuAnalysisSchedulePersist();
+  return event;
+}
+
+function cpuAnalysisRecordTurnStart(player){
+  if(!player || player.human) return;
+  const key=`turn-start:${game.turnSerial}:${player.id}`;
+  cpuAnalysisRecordEvent(
+    "turn_start",
+    player,
+    {state:cpuAnalysisStateSnapshot(player)},
+    key
+  );
+}
+
+function cpuAnalysisRecordGoalDecision(player,stage,selectedGoal=null){
+  if(!player || player.human || !game) return;
+  const goals=cpuStrategicGoals(player);
+  const selected=selectedGoal||cpuChooseGoal(player);
+  const selectedKey=selected?cpuGoalKey(selected):null;
+  const bestKey=goals[0]?cpuGoalKey(goals[0]):null;
+  const resourceSignature=RESOURCES.map(resource=>player.resources[resource]||0).join(",");
+  const key=[
+    "goal",
+    game.turnSerial,
+    player.id,
+    resourceSignature,
+    player.roads.length,
+    player.settlements.length,
+    player.cities.length,
+    player.dev.length,
+    game.robberHex??"none",
+    selectedKey??"none",
+  ].join(":");
+  cpuAnalysisRecordEvent(
+    "goal_decision",
+    player,
+    {
+      stage,
+      selectedKey,
+      bestScoreKey:bestKey,
+      selectionReason:
+        selectedKey===bestKey
+          ?"highest_score"
+          :selectedKey
+            ?"persistent_plan_or_tactical_override"
+            :"no_goal",
+      scoreGapFromBest:
+        selected && goals[0]
+          ?cpuAnalysisRound(goals[0].strategicScore-selected.strategicScore)
+          :null,
+      selected:selected?cpuAnalysisGoalSummary(player,selected):null,
+      candidates:goals.slice(0,16).map((goal,index)=>
+        cpuAnalysisGoalSummary(player,goal,index+1)
+      ),
+      state:cpuAnalysisStateSnapshot(player),
+    },
+    key
+  );
+}
+
+function cpuAnalysisRecordAction(player,action,data={}){
+  if(!player || player.human) return;
+  cpuAnalysisRecordEvent(
+    "cpu_action",
+    player,
+    {
+      action,
+      ...cpuAnalysisClone(data),
+      stateAfter:cpuAnalysisStateSnapshot(player),
+    }
+  );
+}
+
+function cpuAnalysisRecordSetupSettlement(playerId,scored){
+  const player=playerById(playerId);
+  if(!player || player.human) return;
+  cpuAnalysisRecordEvent(
+    "setup_settlement_decision",
+    player,
+    {
+      selectedVertexId:scored[0]?.id??null,
+      candidates:scored.slice(0,20).map((item,index)=>({
+        rank:index+1,
+        vertexId:item.id,
+        score:cpuAnalysisRound(item.score),
+        baseScore:cpuAnalysisRound(item.baseScore),
+        pairPotential:cpuAnalysisRound(item.pairPotential),
+        target:cpuAnalysisDescribeVertex(item.id),
+      })),
+      state:cpuAnalysisStateSnapshot(player),
+    },
+    `setup-settlement:${game.setupIndex}:${playerId}`
+  );
+}
+
+function cpuAnalysisRecordSetupRoad(player,scored){
+  if(!player || player.human) return;
+  cpuAnalysisRecordEvent(
+    "setup_road_decision",
+    player,
+    {
+      selectedEdgeId:scored[0]?.id??null,
+      candidates:scored.slice(0,12).map((item,index)=>({
+        rank:index+1,
+        edgeId:item.id,
+        score:cpuAnalysisRound(item.score),
+        edge:cpuAnalysisDescribeEdge(item.id),
+      })),
+      state:cpuAnalysisStateSnapshot(player),
+    },
+    `setup-road:${game.setupIndex}:${player.id}`
+  );
+}
+
+function cpuAnalysisFinalizeMatch(winner=null){
+  if(!cpuAnalysisSession || cpuAnalysisSession.result) return;
+  const winningPlayer=winner||(
+    game?.winner!==null && game?.winner!==undefined
+      ?playerById(game.winner)
+      :null
+  );
+  cpuAnalysisSession.result={
+    status:winningPlayer?"finished":"abandoned",
+    endedAt:cpuAnalysisNowIso(),
+    winnerId:winningPlayer?.id??null,
+    winnerName:winningPlayer?.name??null,
+    turns:game?.turnNo??null,
+    turnSerial:game?.turnSerial??null,
+    finalState:game?cpuAnalysisStateSnapshot(winningPlayer,true):null,
+    diceHistory:cpuAnalysisClone(game?.diceHistory||[]),
+    logHistory:cpuAnalysisClone(game?.logHistory||[]),
+  };
+  cpuAnalysisSession.updatedAt=cpuAnalysisSession.result.endedAt;
+  cpuAnalysisPersistSession(true);
+}
+
+function cpuAnalysisAbandonCurrent(reason="new_game"){
+  if(!cpuAnalysisSession) return;
+  if(cpuAnalysisSession.result){
+    cpuAnalysisSession=null;
+    cpuAnalysisDedupeKeys.clear();
+    return;
+  }
+  cpuAnalysisSession.result={
+    status:"abandoned",
+    reason,
+    endedAt:cpuAnalysisNowIso(),
+    winnerId:null,
+    winnerName:null,
+    turns:game?.turnNo??null,
+    turnSerial:game?.turnSerial??null,
+    finalState:game?cpuAnalysisStateSnapshot(null,true):null,
+    diceHistory:cpuAnalysisClone(game?.diceHistory||[]),
+    logHistory:cpuAnalysisClone(game?.logHistory||[]),
+  };
+  cpuAnalysisPersistSession(true);
+  cpuAnalysisSession=null;
+  cpuAnalysisDedupeKeys.clear();
+}
+
+function cpuAnalysisOpenDb(){
+  if(typeof indexedDB==="undefined") return Promise.resolve(null);
+  return new Promise(resolve=>{
+    let request;
+    try{
+      request=indexedDB.open(CPU_ANALYSIS_DB_NAME,CPU_ANALYSIS_DB_VERSION);
+    }catch(_error){
+      resolve(null);
+      return;
+    }
+    request.onupgradeneeded=()=>{
+      const db=request.result;
+      if(!db.objectStoreNames.contains(CPU_ANALYSIS_STORE)){
+        const store=db.createObjectStore(CPU_ANALYSIS_STORE,{keyPath:"matchId"});
+        store.createIndex("startedAt","startedAt",{unique:false});
+      }
+    };
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>resolve(null);
+  });
+}
+
+async function cpuAnalysisPersistRecord(record){
+  const db=await cpuAnalysisOpenDb();
+  if(!db || !record?.matchId) return false;
+  const payload=cpuAnalysisClone(record);
+  return new Promise(resolve=>{
+    try{
+      const tx=db.transaction(CPU_ANALYSIS_STORE,"readwrite");
+      tx.objectStore(CPU_ANALYSIS_STORE).put(payload);
+      tx.oncomplete=()=>{
+        db.close();
+        resolve(true);
+      };
+      tx.onerror=()=>{
+        db.close();
+        resolve(false);
+      };
+      tx.onabort=()=>{
+        db.close();
+        resolve(false);
+      };
+    }catch(_error){
+      db.close();
+      resolve(false);
+    }
+  });
+}
+
+function cpuAnalysisSchedulePersist(){
+  cpuAnalysisEventsSincePersist++;
+  const now=Date.now();
+  const dueByCount=cpuAnalysisEventsSincePersist>=45;
+  const dueByTime=!cpuAnalysisLastPersistAt || now-cpuAnalysisLastPersistAt>=60000;
+  if(!dueByCount && !dueByTime) return;
+  if(cpuAnalysisPersistTimer) return;
+  cpuAnalysisPersistTimer=setTimeout(()=>{
+    cpuAnalysisPersistTimer=null;
+    cpuAnalysisPersistSession(false);
+  },800);
+}
+
+
+async function cpuAnalysisPersistSession(prune=false){
+  if(!cpuAnalysisSession) return false;
+  const saved=await cpuAnalysisPersistRecord(cpuAnalysisSession);
+  if(saved){
+    cpuAnalysisEventsSincePersist=0;
+    cpuAnalysisLastPersistAt=Date.now();
+  }
+  if(saved && prune) await cpuAnalysisPruneOldMatches();
+  if($("cpuAnalysisModal") && !$("cpuAnalysisModal").classList.contains("hidden")){
+    cpuAnalysisRefreshUi();
+  }
+  return saved;
+}
+
+async function cpuAnalysisGetMatches(){
+  const db=await cpuAnalysisOpenDb();
+  if(!db) return cpuAnalysisSession?[cpuAnalysisClone(cpuAnalysisSession)]:[];
+  const records=await new Promise(resolve=>{
+    try{
+      const tx=db.transaction(CPU_ANALYSIS_STORE,"readonly");
+      const request=tx.objectStore(CPU_ANALYSIS_STORE).getAll();
+      request.onsuccess=()=>resolve(request.result||[]);
+      request.onerror=()=>resolve([]);
+    }catch(_error){
+      resolve([]);
+    }
+  });
+  db.close();
+  if(cpuAnalysisSession){
+    const current=cpuAnalysisClone(cpuAnalysisSession);
+    const existingIndex=records.findIndex(record=>record.matchId===cpuAnalysisSession.matchId);
+    if(existingIndex>=0){
+      records[existingIndex]=current;
+    }else{
+      records.push(current);
+    }
+  }
+  return records.sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
+}
+
+async function cpuAnalysisDeleteMatch(matchId){
+  const db=await cpuAnalysisOpenDb();
+  if(db){
+    await new Promise(resolve=>{
+      try{
+        const tx=db.transaction(CPU_ANALYSIS_STORE,"readwrite");
+        tx.objectStore(CPU_ANALYSIS_STORE).delete(matchId);
+        tx.oncomplete=()=>resolve();
+        tx.onerror=()=>resolve();
+      }catch(_error){ resolve(); }
+    });
+    db.close();
+  }
+  if(cpuAnalysisSession?.matchId===matchId){
+    cpuAnalysisSession=null;
+    cpuAnalysisDedupeKeys.clear();
+  }
+}
+
+async function cpuAnalysisClearAll(){
+  const db=await cpuAnalysisOpenDb();
+  if(db){
+    await new Promise(resolve=>{
+      try{
+        const tx=db.transaction(CPU_ANALYSIS_STORE,"readwrite");
+        tx.objectStore(CPU_ANALYSIS_STORE).clear();
+        tx.oncomplete=()=>resolve();
+        tx.onerror=()=>resolve();
+      }catch(_error){ resolve(); }
+    });
+    db.close();
+  }
+  cpuAnalysisSession=null;
+  cpuAnalysisDedupeKeys.clear();
+}
+
+async function cpuAnalysisPruneOldMatches(){
+  const records=await cpuAnalysisGetMatches();
+  const extra=records.slice(CPU_ANALYSIS_MAX_MATCHES);
+  for(const record of extra){
+    await cpuAnalysisDeleteMatch(record.matchId);
+  }
+}
+
+function cpuAnalysisCsvEscape(value){
+  const text=value===null||value===undefined?"":String(value);
+  return `"${text.replace(/"/g,'""')}"`;
+}
+
+function cpuAnalysisMatchToCsv(match){
+  const header=[
+    "matchId","appVersion","winner","eventSeq","turnSerial","turnNo","stage",
+    "cpuId","cpuName","cpuVP","targetVP","wood","brick","wool","grain","ore",
+    "rank","selected","selectionReason","kind","key","targetId","expansionTargetId","roadsNeeded",
+    "strategicScore","base","boardComponent","outcomeComponent","contestComponent",
+    "distancePenalty","etaPenalty","lookaheadBonus","lookaheadScore","distance","eta","missing","buildable"
+  ];
+  const rows=[header];
+  for(const event of match.events||[]){
+    if(event.type!=="goal_decision") continue;
+    const data=event.data||{};
+    const focus=(data.state?.players||[]).find(player=>player.id===event.playerId)||{};
+    for(const candidate of data.candidates||[]){
+      rows.push([
+        match.matchId,
+        match.appVersion,
+        match.result?.winnerName||"",
+        event.seq,
+        event.turnSerial,
+        event.turnNo,
+        data.stage||"",
+        event.playerId,
+        event.playerName,
+        focus.totalVP??"",
+        focus.victoryTarget??"",
+        focus.resources?.wood??0,
+        focus.resources?.brick??0,
+        focus.resources?.wool??0,
+        focus.resources?.grain??0,
+        focus.resources?.ore??0,
+        candidate.rank??"",
+        candidate.key===data.selectedKey?1:0,
+        data.selectionReason||"",
+        candidate.kind||"",
+        candidate.key||"",
+        candidate.targetId??"",
+        candidate.expansionTargetId??"",
+        candidate.roadsNeeded??"",
+        candidate.strategicScore??"",
+        candidate.scoreComponents?.base??"",
+        candidate.scoreComponents?.board??"",
+        candidate.scoreComponents?.outcome??"",
+        candidate.scoreComponents?.contest??"",
+        candidate.scoreComponents?.distancePenalty??"",
+        candidate.scoreComponents?.etaPenalty??"",
+        candidate.scoreComponents?.lookahead??"",
+        candidate.lookaheadScore??"",
+        candidate.distance??"",
+        candidate.eta??"",
+        candidate.missing??"",
+        candidate.buildable?1:0,
+      ]);
+    }
+  }
+  return rows.map(row=>row.map(cpuAnalysisCsvEscape).join(",")).join("\r\n");
+}
+
+function cpuAnalysisSafeFilename(text){
+  return String(text||"analysis").replace(/[^0-9A-Za-z_\-.]/g,"_");
+}
+
+function cpuAnalysisSaveText(filename,text,mime){
+  const blob=new Blob([text],{type:mime});
+  const url=URL.createObjectURL(blob);
+  const anchor=document.createElement("a");
+  anchor.href=url;
+  anchor.download=filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+
+async function cpuAnalysisExportMatch(matchId,format="json"){
+  await cpuAnalysisPersistSession(false);
+  const records=await cpuAnalysisGetMatches();
+  const match=records.find(record=>record.matchId===matchId)||records[0];
+  if(!match) return false;
+  const stamp=String(match.startedAt||"").replace(/[:.]/g,"-");
+  if(format==="csv"){
+    cpuAnalysisSaveText(
+      `catan_cpu_${cpuAnalysisSafeFilename(stamp)}_${cpuAnalysisSafeFilename(match.matchId)}.csv`,
+      cpuAnalysisMatchToCsv(match),
+      "text/csv;charset=utf-8"
+    );
+  }else{
+    cpuAnalysisSaveText(
+      `catan_cpu_${cpuAnalysisSafeFilename(stamp)}_${cpuAnalysisSafeFilename(match.matchId)}.json`,
+      JSON.stringify(match,null,2),
+      "application/json;charset=utf-8"
+    );
+  }
+  return true;
+}
+
+async function cpuAnalysisExportAll(){
+  await cpuAnalysisPersistSession(false);
+  const records=await cpuAnalysisGetMatches();
+  if(!records.length) return false;
+  cpuAnalysisSaveText(
+    `catan_cpu_all_${Date.now()}.json`,
+    JSON.stringify({
+      schemaVersion:CPU_ANALYSIS_SCHEMA_VERSION,
+      appVersion:CPU_ANALYSIS_APP_VERSION,
+      exportedAt:cpuAnalysisNowIso(),
+      matches:records,
+    },null,2),
+    "application/json;charset=utf-8"
+  );
+  return true;
+}
+
+function cpuAnalysisFormatStartedAt(value){
+  if(!value) return "日時不明";
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("ja-JP");
+}
+
+async function cpuAnalysisRefreshUi(){
+  const list=$("cpuAnalysisMatchList");
+  const status=$("cpuAnalysisStatus");
+  if(!list || !status) return;
+  const records=await cpuAnalysisGetMatches();
+  const currentEvents=cpuAnalysisSession?.events?.length||0;
+  status.textContent=`保存対戦：${records.length}件${cpuAnalysisSession&&!cpuAnalysisSession.result?`｜現在記録中：${currentEvents}イベント`:""}`;
+  if(!records.length){
+    list.innerHTML='<p class="cpu-analysis-empty">まだCPU解析データはありません。</p>';
+    return;
+  }
+  list.innerHTML=records.map(record=>{
+    const result=record.result;
+    const statusText=result?.status==="finished"
+      ?`勝者：${result.winnerName||"不明"}`
+      :result?.status==="abandoned"
+        ?"中断"
+        :"記録中";
+    const cpuNames=(record.meta?.players||[]).filter(player=>!player.human).map(player=>player.name).join(" / ")||"CPUなし";
+    return `
+      <article class="cpu-analysis-match" data-analysis-match="${record.matchId}">
+        <div class="cpu-analysis-match-main">
+          <strong>${cpuAnalysisFormatStartedAt(record.startedAt)}</strong>
+          <span>${record.appVersion||""}｜${record.meta?.playerCount||"?"}人${record.meta?.fishermen?"・漁師":""}｜${statusText}</span>
+          <small>${cpuNames}｜イベント ${(record.events||[]).length}件</small>
+        </div>
+        <div class="cpu-analysis-match-actions">
+          <button type="button" data-analysis-export="json" data-match-id="${record.matchId}">JSON</button>
+          <button type="button" class="secondary" data-analysis-export="csv" data-match-id="${record.matchId}">CSV</button>
+          <button type="button" class="danger" data-analysis-delete="${record.matchId}">削除</button>
+        </div>
+      </article>`;
+  }).join("");
+}
+
+function cpuAnalysisOpenModal(){
+  const modal=$("cpuAnalysisModal");
+  if(!modal) return;
+  modal.classList.remove("hidden");
+  cpuAnalysisRefreshUi();
+}
+
+function cpuAnalysisCloseModal(){
+  $("cpuAnalysisModal")?.classList.add("hidden");
+}
+
+function initCpuAnalysisUi(){
+  document.querySelectorAll("[data-open-cpu-analysis]").forEach(button=>{
+    button.addEventListener("click",cpuAnalysisOpenModal);
+  });
+  $("cpuAnalysisCloseBtn")?.addEventListener("click",cpuAnalysisCloseModal);
+  $("cpuAnalysisModal")?.addEventListener("click",event=>{
+    if(event.target===$("cpuAnalysisModal")) cpuAnalysisCloseModal();
+  });
+  $("cpuAnalysisExportLatestJson")?.addEventListener("click",async()=>{
+    const records=await cpuAnalysisGetMatches();
+    if(records[0]) cpuAnalysisExportMatch(records[0].matchId,"json");
+  });
+  $("cpuAnalysisExportLatestCsv")?.addEventListener("click",async()=>{
+    const records=await cpuAnalysisGetMatches();
+    if(records[0]) cpuAnalysisExportMatch(records[0].matchId,"csv");
+  });
+  $("cpuAnalysisExportAllJson")?.addEventListener("click",cpuAnalysisExportAll);
+  $("cpuAnalysisClearAll")?.addEventListener("click",async()=>{
+    if(!confirm("保存済みのCPU解析データをすべて削除しますか？")) return;
+    await cpuAnalysisClearAll();
+    cpuAnalysisRefreshUi();
+  });
+  $("cpuAnalysisMatchList")?.addEventListener("click",async event=>{
+    const exportButton=event.target.closest("[data-analysis-export]");
+    if(exportButton){
+      cpuAnalysisExportMatch(exportButton.dataset.matchId,exportButton.dataset.analysisExport);
+      return;
+    }
+    const deleteButton=event.target.closest("[data-analysis-delete]");
+    if(deleteButton){
+      if(!confirm("この対戦のCPU解析データを削除しますか？")) return;
+      await cpuAnalysisDeleteMatch(deleteButton.dataset.analysisDelete);
+      cpuAnalysisRefreshUi();
+    }
+  });
+}
+
 const HEX_DIRECTIONS = [
   [1,0], [1,-1], [0,-1], [-1,0], [-1,1], [0,1]
 ];
@@ -989,6 +1840,7 @@ function createFishSupply(large){
 }
 
 function newGame(){
+  cpuAnalysisAbandonCurrent("new_game");
   cpuStrategicGoalCache.clear();
   cpuRoadSequenceCache.clear();
   clearTimeout(cpuTimer);
@@ -1865,12 +2717,14 @@ function resolveDiceRoll(playerId,dice,afterResolve){
   const sum=dice[0]+dice[1];
   log(`${p.name}が ${sum} を出しました。`);
   if(sum===7){
+    cpuAnalysisRecordAction(p,"dice_roll",{dice:[...dice],sum,seven:true});
     queueAwardEvent("robberAppears");
     handleSeven(playerId,afterResolve);
     render();
     return;
   }
   produce(sum);
+  cpuAnalysisRecordAction(p,"dice_roll",{dice:[...dice],sum,seven:false});
   render();
   if(typeof afterResolve==="function" && game.phase==="turn" && !game.winner){
     const delay=p?.human ?280:CPU_ACTION_DELAY_MS;
@@ -3419,12 +4273,23 @@ function cpuExecuteGoal(player,goal){
     return false;
   }
 
+  const analysisGoal=
+    cpuAnalysisGoalSummary(
+      player,
+      goal
+    );
+
   if(goal.kind==="city"){
     placeCity(
       player.id,
       goal.targetId
     );
     player.builtThisTurn=true;
+    cpuAnalysisRecordAction(
+      player,
+      "build_city",
+      {goal:analysisGoal}
+    );
     log(`${player.name}が都市を建てました。`);
     return true;
   }
@@ -3443,6 +4308,11 @@ function cpuExecuteGoal(player,goal){
     );
 
     player.builtThisTurn=true;
+    cpuAnalysisRecordAction(
+      player,
+      "build_settlement",
+      {goal:analysisGoal}
+    );
     log(`${player.name}が開拓地を建てました。`);
     return true;
   }
@@ -3455,16 +4325,30 @@ function cpuExecuteGoal(player,goal){
     );
 
     player.builtThisTurn=true;
+    cpuAnalysisRecordAction(
+      player,
+      "build_road",
+      {goal:analysisGoal}
+    );
     log(`${player.name}が街道を建てました。`);
     return true;
   }
 
   if(goal.kind==="dev"){
-    return buyDev(player.id);
+    const bought=buyDev(player.id);
+    if(bought){
+      cpuAnalysisRecordAction(
+        player,
+        "buy_development",
+        {goal:analysisGoal}
+      );
+    }
+    return bought;
   }
 
   return false;
 }
+
 
 
 function cpuSimulatedResources(
@@ -4980,6 +5864,24 @@ function cpuDiscardHalf(player,need){
 
   if(actualNeed<=0) return false;
 
+  const goal=cpuChooseGoal(player);
+  const stateBefore=cpuAnalysisStateSnapshot(player);
+  const keepValues=Object.fromEntries(
+    RESOURCES.map(resource=>[
+      resource,
+      cpuAnalysisRound(
+        cpuResourceKeepValue(
+          player,
+          resource,
+          goal
+        )
+      ),
+    ])
+  );
+  const discardedByResource=Object.fromEntries(
+    RESOURCES.map(resource=>[resource,0])
+  );
+
   let left=actualNeed;
 
   while(left>0){
@@ -4990,17 +5892,42 @@ function cpuDiscardHalf(player,need){
 
     player.resources[resource]--;
     game.bank[resource]++;
+    discardedByResource[resource]++;
     left--;
   }
 
   const discarded=
     actualNeed-left;
 
+  cpuAnalysisRecordEvent(
+    "discard_decision",
+    player,
+    {
+      need:actualNeed,
+      goal:goal?cpuAnalysisGoalSummary(player,goal):null,
+      keepValues,
+      discardedByResource,
+      stateBefore,
+      stateAfter:cpuAnalysisStateSnapshot(player),
+    }
+  );
+
   if(discarded>0){
     showResourceDelta(
       player.id,
       {unknown:-discarded},
       "7の破棄"
+    );
+
+    cpuAnalysisRecordAction(
+      player,
+      "discard_for_seven",
+      {
+        need:actualNeed,
+        discarded,
+        discardedByResource,
+        keepValues,
+      }
     );
 
     log(
@@ -5011,6 +5938,7 @@ function cpuDiscardHalf(player,need){
 
   return discarded===actualNeed;
 }
+
 
 function clearCpuDiscardSchedule(){
   clearTimeout(cpuDiscardTimer);
@@ -5514,13 +6442,35 @@ function stealRandom(thiefId,victimId,reason="🐱"){
   log(`${thief.name}が${reason==="🐱"?"🐱で":"魚の効果で"}${victim.name}から資源を1枚奪いました。`);
 }
 function cpuMoveRobber(playerId){
+  const player=playerById(playerId);
+  const scoredHexes=game.board.hexes
+    .filter(hex=>hex.id!==game.robberHex)
+    .map(hex=>({
+      hexId:hex.id,
+      resource:hex.resource,
+      number:hex.number??null,
+      lakeNumbers:hex.lakeNumbers?[...hex.lakeNumbers]:null,
+      score:robberTargetScore(hex,playerId),
+    }))
+    .sort((a,b)=>b.score-a.score);
+
   const bestHexId=
+    scoredHexes[0]?.hexId??
     cpuBestRobberHexId(playerId);
 
   if(
     bestHexId===null ||
     bestHexId===undefined
   ){
+    cpuAnalysisRecordEvent(
+      "robber_decision",
+      player,
+      {
+        selectedHexId:null,
+        hexCandidates:scoredHexes,
+        victimCandidates:[],
+      }
+    );
     finishRobberMove(
       playerId,
       null
@@ -5528,16 +6478,21 @@ function cpuMoveRobber(playerId){
     return;
   }
 
-  const hex=
-    game.board.hexes[bestHexId];
-
-  game.robberHex=bestHexId;
-
   const candidates=
     robberVictimCandidates(
       bestHexId,
       playerId
     );
+
+  const victimScores=candidates.map(victim=>({
+    playerId:victim.id,
+    name:victim.name,
+    score:cpuVictimScore(victim,player),
+    publicVP:publicVP(victim),
+    resources:totalResources(victim),
+    hasLongestRoad:!!victim.hasLongestRoad,
+    hasLargestArmy:!!victim.hasLargestArmy,
+  })).sort((a,b)=>b.score-a.score);
 
   const victim=
     cpuChooseVictimFromCandidates(
@@ -5545,11 +6500,44 @@ function cpuMoveRobber(playerId){
       playerId
     );
 
+  cpuAnalysisRecordEvent(
+    "robber_decision",
+    player,
+    {
+      selectedHexId:bestHexId,
+      selectedVictimId:victim?.id??null,
+      hexCandidates:scoredHexes.slice(0,20).map((item,index)=>({
+        rank:index+1,
+        ...item,
+        score:cpuAnalysisRound(item.score),
+      })),
+      victimCandidates:victimScores.map((item,index)=>({
+        rank:index+1,
+        ...item,
+        score:cpuAnalysisRound(item.score),
+      })),
+      stateBefore:cpuAnalysisStateSnapshot(player),
+    }
+  );
+
+  game.robberHex=bestHexId;
+
+  cpuAnalysisRecordAction(
+    player,
+    "move_robber",
+    {
+      hexId:bestHexId,
+      victimId:victim?.id??null,
+      hexScore:cpuAnalysisRound(scoredHexes[0]?.score),
+    }
+  );
+
   finishRobberMove(
     playerId,
     victim?.id??null
   );
 }
+
 
 function robberTargetScore(h,playerId){
   if(
@@ -6261,6 +7249,11 @@ function cpuTryPlayerTrade(player){
     cpuChooseGoal(player);
 
   if(!goal?.cost){
+    cpuAnalysisRecordEvent(
+      "player_trade_decision",
+      player,
+      {reason:"no_goal",selected:null,candidates:[]}
+    );
     return false;
   }
 
@@ -6271,6 +7264,16 @@ function cpuTryPlayerTrade(player){
     );
 
   if(beforeDistance<=0){
+    cpuAnalysisRecordEvent(
+      "player_trade_decision",
+      player,
+      {
+        reason:"goal_already_complete",
+        goal:cpuAnalysisGoalSummary(player,goal),
+        selected:null,
+        candidates:[],
+      }
+    );
     return false;
   }
 
@@ -6281,10 +7284,21 @@ function cpuTryPlayerTrade(player){
     );
 
   if(!wanted.length){
+    cpuAnalysisRecordEvent(
+      "player_trade_decision",
+      player,
+      {
+        reason:"no_missing_resource",
+        goal:cpuAnalysisGoalSummary(player,goal),
+        selected:null,
+        candidates:[],
+      }
+    );
     return false;
   }
 
   const candidates=[];
+  const rejected=[];
 
   for(const wantedItem of wanted){
     const receive=
@@ -6303,10 +7317,6 @@ function cpuTryPlayerTrade(player){
           goalNeed
         );
 
-      /*
-        まず1:1。
-        十分余っている場合のみ2:1も候補にする。
-      */
       const offerAmounts=[];
 
       if(player.resources[give]>=1){
@@ -6363,14 +7373,24 @@ function cpuTryPlayerTrade(player){
             continue;
           }
 
-          if(
-            !cpuAcceptTrade(
+          const accepted=
+            cpuAcceptTrade(
               target,
               giveBundle,
               getBundle,
               player
-            )
-          ){
+            );
+
+          if(!accepted){
+            rejected.push({
+              targetId:target.id,
+              targetName:target.name,
+              give,
+              receive,
+              offerAmount,
+              improvement,
+              reason:"target_rejected",
+            });
             continue;
           }
 
@@ -6391,6 +7411,15 @@ function cpuTryPlayerTrade(player){
             targetPoints>=playerPoints &&
             !ownImmediateWin
           ){
+            rejected.push({
+              targetId:target.id,
+              targetName:target.name,
+              give,
+              receive,
+              offerAmount,
+              improvement,
+              reason:"leader_at_9",
+            });
             continue;
           }
 
@@ -6408,8 +7437,20 @@ function cpuTryPlayerTrade(player){
 
           candidates.push({
             target,
+            targetId:target.id,
+            targetName:target.name,
             giveBundle,
             getBundle,
+            giveResource:give,
+            receiveResource:receive,
+            offerAmount,
+            beforeDistance,
+            afterDistance,
+            improvement,
+            targetPoints,
+            playerPoints,
+            leaderPenalty,
+            ownImmediateWin,
             score:
               improvement*12-
               offerAmount*1.5-
@@ -6420,15 +7461,53 @@ function cpuTryPlayerTrade(player){
     }
   }
 
-  if(!candidates.length){
-    return false;
-  }
-
   candidates.sort(
     (a,b)=>b.score-a.score
   );
 
-  const best=candidates[0];
+  const best=candidates[0]||null;
+
+  cpuAnalysisRecordEvent(
+    "player_trade_decision",
+    player,
+    {
+      reason:best?"selected_best_viable":"no_viable_trade",
+      goal:cpuAnalysisGoalSummary(player,goal),
+      wanted:cpuAnalysisClone(wanted),
+      selected:best?{
+        targetId:best.targetId,
+        targetName:best.targetName,
+        giveBundle:cpuAnalysisClone(best.giveBundle),
+        getBundle:cpuAnalysisClone(best.getBundle),
+        improvement:cpuAnalysisRound(best.improvement),
+        leaderPenalty:best.leaderPenalty,
+        ownImmediateWin:best.ownImmediateWin,
+        score:cpuAnalysisRound(best.score),
+      }:null,
+      candidates:candidates.slice(0,20).map((candidate,index)=>({
+        rank:index+1,
+        targetId:candidate.targetId,
+        targetName:candidate.targetName,
+        giveBundle:cpuAnalysisClone(candidate.giveBundle),
+        getBundle:cpuAnalysisClone(candidate.getBundle),
+        improvement:cpuAnalysisRound(candidate.improvement),
+        beforeDistance:cpuAnalysisRound(candidate.beforeDistance),
+        afterDistance:cpuAnalysisRound(candidate.afterDistance),
+        leaderPenalty:candidate.leaderPenalty,
+        ownImmediateWin:candidate.ownImmediateWin,
+        score:cpuAnalysisRound(candidate.score),
+      })),
+      rejected:rejected.slice(0,30).map(item=>({
+        ...item,
+        improvement:cpuAnalysisRound(item.improvement),
+      })),
+      stateBefore:cpuAnalysisStateSnapshot(player),
+    }
+  );
+
+  if(!best){
+    return false;
+  }
 
   const completed=
     executePlayerTrade(
@@ -6442,6 +7521,19 @@ function cpuTryPlayerTrade(player){
     );
 
   if(completed){
+    cpuAnalysisRecordAction(
+      player,
+      "player_trade",
+      {
+        targetId:best.targetId,
+        targetName:best.targetName,
+        giveBundle:cpuAnalysisClone(best.giveBundle),
+        getBundle:cpuAnalysisClone(best.getBundle),
+        score:cpuAnalysisRound(best.score),
+        improvement:cpuAnalysisRound(best.improvement),
+        goalKey:cpuGoalKey(goal),
+      }
+    );
     log(
       `${player.name}が`+
       `${best.target.name}と`+
@@ -6451,6 +7543,7 @@ function cpuTryPlayerTrade(player){
 
   return completed;
 }
+
 
 function executePlayerTrade(
   target,
@@ -6981,7 +8074,17 @@ function transferOldBootHuman(){
 function cpuTransferBoot(player){
   if(game.oldBootHolder!==player.id) return false;
   const candidates=eligibleBootRecipients(player).sort((a,b)=>publicVP(b)-publicVP(a));
-  return candidates.length?transferOldBoot(player.id,candidates[0].id):false;
+  if(!candidates.length) return false;
+  const target=candidates[0];
+  const moved=transferOldBoot(player.id,target.id);
+  if(moved){
+    cpuAnalysisRecordAction(player,"transfer_old_boot",{
+      targetId:target.id,
+      targetName:target.name,
+      candidateIds:candidates.map(candidate=>candidate.id),
+    });
+  }
+  return moved;
 }
 function cpuSpendFish(player,cost,reason){
   const payment=findFishPayment(player.fishTokens,cost);
@@ -6999,10 +8102,8 @@ function cpuUseFish(player,maxActions=3){
   const actionLimit=Math.max(1,Number(maxActions)||1);
 
   while(actions<actionLimit){
-    /*
-      自分の生産地が盗賊で止められているなら
-      まず2匹で追放する。
-    */
+    const tokensBefore=[...player.fishTokens];
+
     if(
       robberHurtsPlayer(player) &&
       game.robberHex!==null &&
@@ -7011,6 +8112,7 @@ function cpuUseFish(player,maxActions=3){
         2
       )
     ){
+      const oldRobberHex=game.robberHex;
       cpuSpendFish(
         player,
         2,
@@ -7022,6 +8124,12 @@ function cpuUseFish(player,maxActions=3){
       queueAwardEvent(
         "fishRemoveRobber",
         player.id
+      );
+
+      cpuAnalysisRecordAction(
+        player,
+        "fish_remove_robber",
+        {cost:2,robberHex:oldRobberHex,tokensBefore}
       );
 
       log(
@@ -7042,10 +8150,6 @@ function cpuUseFish(player,maxActions=3){
         goal
       );
 
-    /*
-      4匹で目標建設を完成・接近できるなら
-      その不足資源を取る。
-    */
     if(
       missing.length &&
       findFishPayment(
@@ -7081,15 +8185,23 @@ function cpuUseFish(player,maxActions=3){
           "魚4匹"
         );
 
+        cpuAnalysisRecordAction(
+          player,
+          "fish_resource",
+          {
+            cost:4,
+            resource,
+            got,
+            tokensBefore,
+            goal:goal?cpuAnalysisGoalSummary(player,goal):null,
+          }
+        );
+
         actions++;
         continue;
       }
     }
 
-    /*
-      開拓地候補へ伸ばす価値が高い時だけ
-      5匹の無料街道を使う。
-    */
     if(
       player.pieces.road>0 &&
       findFishPayment(
@@ -7116,6 +8228,18 @@ function cpuUseFish(player,maxActions=3){
           true
         );
 
+        cpuAnalysisRecordAction(
+          player,
+          "fish_free_road",
+          {
+            cost:5,
+            edgeId:bestRoad.id,
+            roadScore:cpuAnalysisRound(bestRoad.score),
+            awardGain:bestRoad.awardGain||0,
+            tokensBefore,
+          }
+        );
+
         log(
           `${player.name}が魚で`+
           "無料街道を建てました。"
@@ -7126,10 +8250,6 @@ function cpuUseFish(player,maxActions=3){
       }
     }
 
-    /*
-      相手が資源を多く持っている場合は
-      3匹の強奪も使う。
-    */
     if(
       findFishPayment(
         player.fishTokens,
@@ -7156,6 +8276,7 @@ function cpuUseFish(player,maxActions=3){
           publicVP(victim)>=7
         )
       ){
+        const victimScore=cpuVictimScore(victim,player);
         cpuSpendFish(
           player,
           3,
@@ -7168,15 +8289,23 @@ function cpuUseFish(player,maxActions=3){
           "魚3匹"
         );
 
+        cpuAnalysisRecordAction(
+          player,
+          "fish_steal",
+          {
+            cost:3,
+            victimId:victim.id,
+            victimName:victim.name,
+            victimScore:cpuAnalysisRound(victimScore),
+            tokensBefore,
+          }
+        );
+
         actions++;
         continue;
       }
     }
 
-    /*
-      他に明確な用途がなければ
-      7匹で発展カードを取得。
-    */
     if(
       game.devDeck.length &&
       findFishPayment(
@@ -7196,16 +8325,37 @@ function cpuUseFish(player,maxActions=3){
           `${player.name}の魚7匹`
         )
       ){
+        cpuAnalysisRecordAction(
+          player,
+          "fish_free_development",
+          {cost:7,tokensBefore}
+        );
         actions++;
         continue;
       }
     }
+
+    cpuAnalysisRecordEvent(
+      "fish_decision",
+      player,
+      {
+        selected:null,
+        reason:"no_fish_action_worth_using",
+        tokens:[...player.fishTokens],
+        totalFish:player.fishTokens.reduce((sum,token)=>sum+(typeof token==="number"?token:0),0),
+        robberHurtsSelf:robberHurtsPlayer(player),
+        goal:goal?cpuAnalysisGoalSummary(player,goal):null,
+        missing:cpuAnalysisClone(missing),
+      },
+      `fish-none:${game.turnSerial}:${player.id}:${player.fishTokens.join(".")}`
+    );
 
     break;
   }
 
   return actions;
 }
+
 
 function removeDevCard(player,card){
   const index=player.dev.findIndex(item=>item===card);
@@ -7325,6 +8475,12 @@ function finishActivePhase(){
   cpuTimer=null;
   cpuScheduledKey=null;
   const old=currentPlayer();
+  if(old && !old.human){
+    cpuAnalysisRecordAction(old,"turn_end",{
+      turnSerial:game.turnSerial,
+      turnNo:game.turnNo,
+    });
+  }
   resetActivePlayerState(old);
   const nextPlayer=(game.current+1)%game.playerCount;
   if(nextPlayer===0) game.turnNo++;
@@ -7420,6 +8576,7 @@ function cpuAct(){
   if(game.phase==="setupSettlement"){
     const v=bestSetupVertex(p.id);
     placeSettlement(p.id,v,true); game.setupVertex=v; game.phase="setupRoad";
+    cpuAnalysisRecordAction(p,"setup_settlement",{vertexId:v});
     log(`${p.name}が初期開拓地を置きました。`);
     render();
     scheduleCpuIfNeeded();
@@ -7427,28 +8584,27 @@ function cpuAct(){
   }
   if(game.phase==="setupRoad"){
     const options=game.board.vertices[game.setupVertex].edges.filter(e=>canPlaceRoad(p.id,e,game.setupVertex));
-    options.sort(
-      (a,b)=>
-        futureVertexScore(
-          otherEnd(
-            b,
-            game.setupVertex
-          ),
-          p.id
-        )-
-        futureVertexScore(
-          otherEnd(
-            a,
-            game.setupVertex
-          ),
-          p.id
-        )
+    const scored=options.map(edgeId=>({
+      id:edgeId,
+      score:futureVertexScore(
+        otherEnd(
+          edgeId,
+          game.setupVertex
+        ),
+        p.id
+      ),
+    })).sort((a,b)=>b.score-a.score);
+
+    cpuAnalysisRecordSetupRoad(
+      p,
+      scored
     );
 
     const e=
-      options[0]||
+      scored[0]?.id||
       options[options.length-1];
     game.board.edges[e].road=p.id; p.roads.push(e); p.pieces.road--;
+    cpuAnalysisRecordAction(p,"setup_road",{edgeId:e});
     log(`${p.name}が初期街道を置きました。`);
     advanceSetup(); return;
   }
@@ -7470,6 +8626,7 @@ function cpuAct(){
   cpuActionRunning=true;
 
   const playerId=p.id;
+  cpuAnalysisRecordTurnStart(p);
 
   if(game.fishermen){
     const movedBoot=cpuTransferBoot(p);
@@ -7582,6 +8739,7 @@ function cpuBuildPhase(playerOrId,stage="fish"){
     }
 
     if(currentStage==="dev"){
+      cpuAnalysisRecordGoalDecision(p,"dev");
       const devResult=cpuUseStrategicDevelopment(p);
 
       if(devResult==="finished"){
@@ -7614,6 +8772,7 @@ function cpuBuildPhase(playerOrId,stage="fish"){
     }
 
     if(currentStage==="trade"){
+      cpuAnalysisRecordGoalDecision(p,"player_trade");
       if(
         !p.builtThisTurn &&
         cpuTryPlayerTrade(p)
@@ -7629,6 +8788,7 @@ function cpuBuildPhase(playerOrId,stage="fish"){
 
     if(currentStage==="bank"){
       const goal=cpuChooseGoal(p);
+      cpuAnalysisRecordGoalDecision(p,"bank_trade",goal);
 
       if(
         !p.builtThisTurn &&
@@ -7647,6 +8807,7 @@ function cpuBuildPhase(playerOrId,stage="fish"){
 
     if(currentStage==="build"){
       let goal=cpuChooseGoal(p);
+      cpuAnalysisRecordGoalDecision(p,"build",goal);
       let built=false;
 
       if(
@@ -7730,7 +8891,18 @@ function cpuTryBankTrade(p){
   const goal=
     cpuChooseGoal(p);
 
-  if(!goal?.cost) return false;
+  if(!goal?.cost){
+    cpuAnalysisRecordEvent(
+      "bank_trade_decision",
+      p,
+      {
+        selected:null,
+        candidates:[],
+        reason:"no_goal",
+      }
+    );
+    return false;
+  }
 
   const beforeDistance=
     cpuGoalDistance(
@@ -7788,10 +8960,6 @@ function cpuTryBankTrade(p){
         beforeDistance-
         afterDistance;
 
-      /*
-        7で半減する危険が高い時は、
-        ほぼ等価でも手札圧縮を少し評価する。
-      */
       const sevenRiskBonus=
         totalResources(p)>=8
           ?0.45
@@ -7810,20 +8978,42 @@ function cpuTryBankTrade(p){
         giveResource,
         receiveResource,
         rate,
+        beforeDistance,
+        afterDistance,
+        improvement,
+        sevenRiskBonus,
         score,
       });
     }
-  }
-
-  if(!candidates.length){
-    return false;
   }
 
   candidates.sort(
     (a,b)=>b.score-a.score
   );
 
-  const best=candidates[0];
+  const best=candidates[0]||null;
+
+  cpuAnalysisRecordEvent(
+    "bank_trade_decision",
+    p,
+    {
+      goal:cpuAnalysisGoalSummary(p,goal),
+      selected:best?cpuAnalysisClone(best):null,
+      candidates:candidates.slice(0,20).map((candidate,index)=>({
+        rank:index+1,
+        ...cpuAnalysisClone(candidate),
+        score:cpuAnalysisRound(candidate.score),
+        improvement:cpuAnalysisRound(candidate.improvement),
+        beforeDistance:cpuAnalysisRound(candidate.beforeDistance),
+        afterDistance:cpuAnalysisRound(candidate.afterDistance),
+      })),
+      stateBefore:cpuAnalysisStateSnapshot(p),
+    }
+  );
+
+  if(!best){
+    return false;
+  }
 
   p.resources[
     best.giveResource
@@ -7852,6 +9042,19 @@ function cpuTryBankTrade(p){
     "銀行・港交易"
   );
 
+  cpuAnalysisRecordAction(
+    p,
+    "bank_trade",
+    {
+      giveResource:best.giveResource,
+      receiveResource:best.receiveResource,
+      rate:best.rate,
+      score:cpuAnalysisRound(best.score),
+      improvement:cpuAnalysisRound(best.improvement),
+      goalKey:cpuGoalKey(goal),
+    }
+  );
+
   log(
     `${p.name}が`+
     `${RESOURCE_JA[best.giveResource]}`+
@@ -7863,12 +9066,14 @@ function cpuTryBankTrade(p){
   return true;
 }
 
+
 function cpuPlayVictoryPoint(p){
   const idx=p.dev.findIndex(c=>c==="vp");
   if(idx<0 || usableDevCount(p,"vp")<=0) return;
   p.dev.splice(idx,1);
   queueAwardEvent("devVictoryPoint",p.id);
   p.revealedVP++;
+  cpuAnalysisRecordAction(p,"dev_victory_point",{revealedVP:p.revealedVP});
   log(`${p.name}が勝利ポイントカードを公開しました。`);
   checkVictory();
 }
@@ -7983,6 +9188,12 @@ function cpuPlayYearOfPlenty(p){
     "発見"
   );
 
+  cpuAnalysisRecordAction(
+    p,
+    "dev_year_of_plenty",
+    {selectedResources:[...selected],delta,goalKey:goal?cpuGoalKey(goal):null}
+  );
+
   log(
     `${p.name}が発見を使い、`+
     `${selected.map(
@@ -8072,6 +9283,19 @@ function cpuPlayMonopoly(p){
     "独占"
   );
 
+  cpuAnalysisRecordAction(
+    p,
+    "dev_monopoly",
+    {
+      resource:best.resource,
+      amount,
+      score:cpuAnalysisRound(best.score),
+      improvement:cpuAnalysisRound(best.improvement),
+      immediateWin:!!best.immediateWin,
+      othersTotal:best.othersTotal,
+    }
+  );
+
   log(
     `${p.name}が独占を使い、`+
     `${RESOURCE_JA[best.resource]}を`+
@@ -8112,6 +9336,7 @@ function cpuPlayRoadBuilding(p){
   );
 
   let placed=0;
+  const placedEdges=[];
 
   for(let count=0;count<2;count++){
     if(p.pieces.road<=0) break;
@@ -8127,12 +9352,19 @@ function cpuPlayRoadBuilding(p){
       true
     );
 
+    placedEdges.push(best.id);
     placed++;
   }
 
   if(!placed){
     return false;
   }
+
+  cpuAnalysisRecordAction(
+    p,
+    "dev_road_building",
+    {placedEdges,placed}
+  );
 
   log(
     `${p.name}が街道建設を使い、`+
@@ -8147,32 +9379,69 @@ function cpuUseStrategicDevelopment(p){
     v1.50: 1回の呼び出しにつき発展カード系の見える行動は1つだけ。
     次のカード判断は2秒後に再評価する。
   */
-  const vpCount=usableDevCount(p,"vp");
+  const usable={
+    vp:usableDevCount(p,"vp"),
+    yearOfPlenty:usableDevCount(p,"yearOfPlenty"),
+    monopoly:usableDevCount(p,"monopoly"),
+    roadBuilding:usableDevCount(p,"roadBuilding"),
+    knight:usableDevCount(p,"knight"),
+  };
+  const vpCount=usable.vp;
   const neededForWin=Math.max(0,victoryTarget(p)-totalVP(p));
 
   if(vpCount>0 && neededForWin>0 && neededForWin<=vpCount){
+    cpuAnalysisRecordEvent(
+      "development_decision",
+      p,
+      {selected:"victory_point",usable,neededForWin,reason:"enough_hidden_vp_to_win"}
+    );
     cpuPlayVictoryPoint(p);
     return game.winner ?"finished":"action";
   }
 
-  if(cpuCanYearOfPlentyHelp(p)){
+  const canYearOfPlenty=cpuCanYearOfPlentyHelp(p);
+  if(canYearOfPlenty){
+    cpuAnalysisRecordEvent(
+      "development_decision",
+      p,
+      {
+        selected:"year_of_plenty",
+        usable,
+        neededForWin,
+        reason:"goal_missing_one_or_two_resources",
+        goal:cpuAnalysisGoalSummary(p,cpuChooseGoal(p)),
+      }
+    );
     if(cpuPlayYearOfPlenty(p)){
       return "action";
     }
   }
 
+  const monopolyCandidate=usable.monopoly>0
+    ?cpuBestMonopolyResource(p)
+    :null;
   if(cpuPlayMonopoly(p)){
+    cpuAnalysisRecordEvent(
+      "development_decision",
+      p,
+      {
+        selected:"monopoly",
+        usable,
+        neededForWin,
+        candidate:cpuAnalysisClone(monopolyCandidate),
+      }
+    );
     return "action";
   }
 
   const goal=cpuChooseGoal(p);
   const roadBuildingPlan=
-    usableDevCount(p,"roadBuilding")>0
+    usable.roadBuilding>0
       ?cpuBestRoadSequence(p,Math.min(2,p.pieces.road))
       :null;
 
   if(
-    usableDevCount(p,"roadBuilding")>0 &&
+    usable.roadBuilding>0 &&
     (
       goal?.kind==="road" ||
       roadBuildingPlan?.awardGain>0 ||
@@ -8184,16 +9453,58 @@ function cpuUseStrategicDevelopment(p){
     ) &&
     cpuPlayRoadBuilding(p)
   ){
+    cpuAnalysisRecordEvent(
+      "development_decision",
+      p,
+      {
+        selected:"road_building",
+        usable,
+        neededForWin,
+        goal:goal?cpuAnalysisGoalSummary(p,goal):null,
+        roadBuildingPlan:cpuAnalysisClone(roadBuildingPlan),
+      }
+    );
     return "action";
   }
 
-  if(cpuShouldPlayKnight(p)){
+  const shouldKnight=cpuShouldPlayKnight(p);
+  if(shouldKnight){
+    cpuAnalysisRecordEvent(
+      "development_decision",
+      p,
+      {
+        selected:"knight",
+        usable,
+        neededForWin,
+        goal:goal?cpuAnalysisGoalSummary(p,goal):null,
+        robberHurtsSelf:robberHurtsPlayer(p),
+        bestRobberHexId:cpuBestRobberHexId(p.id),
+      }
+    );
     cpuPlayKnight(p);
     return "knight";
   }
 
+  cpuAnalysisRecordEvent(
+    "development_decision",
+    p,
+    {
+      selected:null,
+      usable,
+      neededForWin,
+      canYearOfPlenty,
+      monopolyCandidate:cpuAnalysisClone(monopolyCandidate),
+      roadBuildingPlan:cpuAnalysisClone(roadBuildingPlan),
+      shouldKnight,
+      goal:goal?cpuAnalysisGoalSummary(p,goal):null,
+      reason:"no_development_card_meets_use_threshold",
+    },
+    `dev-none:${game.turnSerial}:${p.id}:${p.dev.join(".")}:${RESOURCES.map(r=>p.resources[r]).join(".")}`
+  );
+
   return "done";
 }
+
 
 function cpuPlayKnight(p){
   const idx=p.dev.indexOf("knight");
@@ -8203,6 +9514,11 @@ function cpuPlayKnight(p){
   queueAwardEvent("devKnight",p.id);
   p.knightsPlayed++;
   updateAwards();
+  cpuAnalysisRecordAction(
+    p,
+    "dev_knight",
+    {knightsPlayed:p.knightsPlayed,robberHurtsSelf:robberHurtsPlayer(p)}
+  );
   log(`${p.name}が騎士を使いました。`);
 
   game.phase="moveRobber";
@@ -8419,41 +9735,37 @@ function bestSetupVertex(playerId){
         )
       );
 
-  candidates.sort(
-    (a,b)=>{
-      const scoreA=
-        setupVertexScore(
-          a,
-          playerId
-        )+
-        (
-          player?.settlements.length===0
-            ?cpuSetupPairPotential(
-              playerId,
-              a
-            )
-            :0
-        );
+  const scored=candidates.map(vertexId=>{
+    const baseScore=
+      setupVertexScore(
+        vertexId,
+        playerId
+      );
 
-      const scoreB=
-        setupVertexScore(
-          b,
-          playerId
-        )+
-        (
-          player?.settlements.length===0
-            ?cpuSetupPairPotential(
-              playerId,
-              b
-            )
-            :0
-        );
+    const pairPotential=
+      player?.settlements.length===0
+        ?cpuSetupPairPotential(
+          playerId,
+          vertexId
+        )
+        :0;
 
-      return scoreB-scoreA;
-    }
+    return {
+      id:vertexId,
+      baseScore,
+      pairPotential,
+      score:baseScore+pairPotential,
+    };
+  });
+
+  scored.sort((a,b)=>b.score-a.score);
+
+  cpuAnalysisRecordSetupSettlement(
+    playerId,
+    scored
   );
 
-  return candidates[0];
+  return scored[0]?.id??null;
 }
 
 function setupVertexScore(
@@ -9088,6 +10400,7 @@ function checkVictory(){
     $("overlayMessage").textContent=`${candidate.name}の勝利！\n${totalVP(candidate)}勝利点`;
     $("overlayMessage").classList.remove("hidden");
     log(`${candidate.name}が${totalVP(candidate)}勝利点で勝利しました。`);
+    cpuAnalysisFinalizeMatch(candidate);
   }
 }
 
@@ -10560,4 +11873,5 @@ $("resultModal").addEventListener("click",event=>{
 initTradeOptions();
 setupResponsiveGameUi();
 preloadTileImages();
+initCpuAnalysisUi();
 initOnlineApp();

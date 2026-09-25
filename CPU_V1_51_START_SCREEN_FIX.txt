@@ -1,0 +1,16 @@
+カタン v1.51 開始画面切替修正
+
+【症状】
+CPU戦/オンライン戦でゲーム開始を押しても開始した本人の画面がロビーのまま残り、ページ更新すると対戦画面へ切り替わることがあった。
+
+【原因】
+v1.50の巻き戻り対策で、同一syncRevisionのroom_stateをgame本体へ再適用しないようにした。
+開始ホストはstart_game送信前にローカルgameを作成してsyncRevision=1としており、Workerが正式開始後に返すgameもsyncRevision=1だったため、開始確認stateまで同一revisionとしてreturnしていた。
+
+【修正】
+同一/古いrevisionでgame本体を上書きしない方針は維持。
+ただしWorkerがphase=playingを返した場合は、game本体を差し替えずにゲーム画面の有効化・ROOM表示・サブタイトル・renderを必ず実行する。
+render中はapplyingRemoteState=trueとしてstateの再送信を防止。
+
+【Worker】
+Worker側のロジック変更なし。v1.50 Workerをそのまま使用可能。

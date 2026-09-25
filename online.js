@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.50";
+const APP_VERSION = "v1.52";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -344,7 +344,7 @@ async function fetchRoomSummaries(){
     if(!response.ok) throw new Error(`HTTP ${response.status}`);
     const data=await response.json();
     renderRoomCards(data.rooms||[]);
-    showOnlineMessage("入室するROOMを選択してください。現在の版：v1.50");
+    showOnlineMessage(`入室するROOMを選択してください。現在の版：${APP_VERSION}`);
   }catch(error){
     showOnlineMessage(`部屋情報を取得できません：${error.message}`,true);
   }
@@ -1035,6 +1035,40 @@ function receiveRoomState(state){
       remoteSyncRevision>localSyncRevision;
 
     if(!shouldApplyGame){
+      /*
+        v1.51:
+        ゲーム開始直後は、ホスト側ですでに start_game 用の game を
+        ローカル生成しているため、Workerから返る正式開始stateと
+        syncRevisionが同じになる。
+
+        v1.50では「同じrevisionは再適用しない」でここをreturnしていたため、
+        state自体はサーバーで開始済みなのに、開始した本人だけロビー画面の
+        まま残ることがあった。ページ更新後に直る症状の原因。
+
+        game本体の上書きはしないまま、Workerがplayingを返した事実を受けて
+        ゲーム画面だけは必ず有効化する。render中の再送信は止めておく。
+      */
+      applyingRemoteState=true;
+      try{
+        showGameScreen();
+        $("currentRoomLabel").textContent=`部屋 ${ROOM_IDS.indexOf(state.roomId)+1}`;
+
+        const mobileReturnButton=$("mobileReturnLobbyBtn");
+        if(mobileReturnButton){
+          const host=isOnlineHost();
+          mobileReturnButton.disabled=!host;
+          mobileReturnButton.textContent=host
+            ?"ロビーへ戻す"
+            :"ロビーへ戻す（ホストのみ）";
+        }
+
+        const cpuCount=game.players.filter(player=>!player.human).length;
+        $("onlineGameSubtitle").textContent=`${game.playerCount}人用${cpuCount?`・CPU${cpuCount}人`:""}${game.fishermen?"・漁師拡張":""}`;
+        render();
+      }finally{
+        applyingRemoteState=false;
+      }
+
       handleOnlinePendingUI();
       scheduleCpuIfNeeded();
       requestStaleDiceRecovery();

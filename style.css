@@ -5111,3 +5111,119 @@ body.desktop-1080-fit
     grid-template-columns: 1fr;
   }
 }
+
+/* v1.52 CPU解析データ */
+.cpu-analysis-open-button{
+  width:100%;
+  margin-top:10px;
+}
+.desktop-analysis-button{
+  white-space:nowrap;
+}
+.cpu-analysis-dialog{
+  width:min(980px,94vw);
+  max-height:88vh;
+  overflow:auto;
+  background:#fff;
+  border-radius:18px;
+  padding:20px;
+  box-shadow:0 24px 70px rgba(0,0,0,.32);
+}
+.cpu-analysis-heading{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:12px;
+}
+.cpu-analysis-heading h2{
+  margin:0 0 6px;
+}
+.cpu-analysis-heading p{
+  margin:0;
+  line-height:1.55;
+}
+.cpu-analysis-close{
+  min-width:44px;
+  font-size:22px;
+  line-height:1;
+}
+.cpu-analysis-status{
+  padding:10px 12px;
+  border-radius:10px;
+  background:#f2f5f8;
+  font-weight:700;
+  margin:10px 0 12px;
+}
+.cpu-analysis-main-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.cpu-analysis-guide{
+  margin:10px 0 14px;
+  font-size:.92rem;
+  color:#48515a;
+}
+.cpu-analysis-match-list{
+  display:grid;
+  gap:10px;
+}
+.cpu-analysis-match{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:12px;
+  border:1px solid #d9dee4;
+  border-radius:12px;
+  background:#fbfcfd;
+}
+.cpu-analysis-match-main{
+  min-width:0;
+  display:grid;
+  gap:3px;
+}
+.cpu-analysis-match-main span,
+.cpu-analysis-match-main small{
+  overflow-wrap:anywhere;
+}
+.cpu-analysis-match-main small{
+  color:#66717c;
+}
+.cpu-analysis-match-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  flex-shrink:0;
+}
+.cpu-analysis-match-actions button{
+  min-width:68px;
+}
+.cpu-analysis-empty{
+  text-align:center;
+  padding:18px;
+  color:#66717c;
+}
+@media (max-width:720px){
+  .cpu-analysis-dialog{
+    width:96vw;
+    max-height:92vh;
+    padding:14px;
+  }
+  .cpu-analysis-heading{
+    gap:8px;
+  }
+  .cpu-analysis-main-actions{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+  }
+  .cpu-analysis-match{
+    align-items:stretch;
+    flex-direction:column;
+  }
+  .cpu-analysis-match-actions{
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+  }
+}

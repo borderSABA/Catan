@@ -5112,7 +5112,7 @@ body.desktop-1080-fit
   }
 }
 
-/* v1.52 CPU解析データ */
+/* v1.53 CPU解析データ */
 .cpu-analysis-open-button{
   width:100%;
   margin-top:10px;
@@ -5226,4 +5226,16 @@ body.desktop-1080-fit
     display:grid;
     grid-template-columns:1fr 1fr 1fr;
   }
+}
+
+/* v1.53 CPU解析サーバー保存 */
+.cpu-analysis-server-box{
+  margin:14px 0;
+  padding:12px;
+  border:1px solid #d9dee4;
+  border-radius:12px;
+  background:#f8fbff;
+}
+.cpu-analysis-server-box .cpu-analysis-status{
+  margin-top:0;
 }

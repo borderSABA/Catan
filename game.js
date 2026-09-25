@@ -75,16 +75,20 @@ function keyPoint(x,y){ return `${Math.round(x*10)/10},${Math.round(y*10)/10}`; 
 function edgeKey(a,b){ return a < b ? `${a}|${b}` : `${b}|${a}`; }
 function deepClone(x){ return JSON.parse(JSON.stringify(x)); }
 
-// v1.52: CPU解析データ。
-// 対戦中のCPU判断をローカルだけへ保存し、オンラインstateには混ぜない。
-// JSONは詳細解析用、CSVは各候補のスコア比較用。
-const CPU_ANALYSIS_SCHEMA_VERSION=1;
+// v1.53: CPU解析データ。
+// 詳細ログはホストPCのIndexedDBへ保存する。
+// 人間行動は「正式受理確認用の小さなレシート」だけ通常stateへ載せ、
+// Workerから返った後にホストが解析ログへ確定する。
+// 終了時だけ軽量化した1試合分を解析保存APIへ1回送信する。
+const CPU_ANALYSIS_SCHEMA_VERSION=2;
 const CPU_ANALYSIS_DB_NAME="catan-cpu-analysis";
 const CPU_ANALYSIS_DB_VERSION=1;
 const CPU_ANALYSIS_STORE="matches";
 const CPU_ANALYSIS_MAX_MATCHES=12;
 const CPU_ANALYSIS_MAX_EVENTS=12000;
-const CPU_ANALYSIS_APP_VERSION="v1.52";
+const CPU_ANALYSIS_APP_VERSION="v1.53";
+const CPU_ANALYSIS_LOGIC_VERSION="MAX_BEAM_V149";
+const CPU_ANALYSIS_SERVER_COMPACT_VERSION=1;
 
 let cpuAnalysisSession=null;
 let cpuAnalysisEventSeq=0;
@@ -309,6 +313,678 @@ function cpuAnalysisGoalSummary(player,goal,rank=null){
   };
 }
 
+
+const cpuAnalysisAcceptedReceiptIds=new Set();
+let cpuAnalysisServerUploadTimer=null;
+
+function cpuAnalysisHumanVisibleState(player){
+  if(!game || !player) return null;
+  return {
+    playerId:player.id,
+    own:{
+      publicVP:publicVP(player),
+      totalVP:totalVP(player),
+      victoryTarget:victoryTarget(player),
+      resources:{...player.resources},
+      resourceTotal:totalResources(player),
+      pieces:{...player.pieces},
+      roads:[...player.roads],
+      settlements:[...player.settlements],
+      cities:[...player.cities],
+      devCount:(player.dev||[]).length,
+      knightsPlayed:player.knightsPlayed||0,
+      fishTokens:[...(player.fishTokens||[])],
+    },
+    opponents:game.players
+      .filter(other=>other.id!==player.id)
+      .map(other=>({
+        id:other.id,
+        name:other.name,
+        human:!!other.human,
+        publicVP:publicVP(other),
+        resourceTotal:totalResources(other),
+        roads:[...other.roads],
+        settlements:[...other.settlements],
+        cities:[...other.cities],
+        devCount:(other.dev||[]).length,
+        knightsPlayed:other.knightsPlayed||0,
+        hasLongestRoad:!!other.hasLongestRoad,
+        hasLargestArmy:!!other.hasLargestArmy,
+      })),
+    phase:game.phase,
+    rolled:!!game.rolled,
+    currentPlayerId:game.current,
+    robberHex:game.robberHex??null,
+    bank:{...game.bank},
+  };
+}
+
+function cpuAnalysisAvailableHumanActions(player){
+  if(!game || !player || !player.human) return null;
+
+  const result={
+    phase:game.phase,
+    canRoll:false,
+    canEndTurn:false,
+    build:{
+      road:[],
+      settlement:[],
+      city:[],
+      dev:false,
+    },
+    bankTrades:[],
+    playerTradeTargets:[],
+    playableDev:[],
+    fishActions:[],
+  };
+
+  if(game.phase==="setupSettlement"){
+    result.build.settlement=Object.keys(game.board.vertices)
+      .filter(vertexId=>canPlaceSettlement(player.id,vertexId,true));
+    return result;
+  }
+
+  if(game.phase==="setupRoad"){
+    result.build.road=Object.keys(game.board.edges)
+      .filter(edgeId=>canPlaceRoad(player.id,edgeId,game.setupVertex));
+    return result;
+  }
+
+  if(game.phase==="moveRobber"){
+    result.robberHexes=game.board.hexes
+      .filter(hex=>hex.id!==game.robberHex)
+      .map(hex=>hex.id);
+    return result;
+  }
+
+  if(game.phase==="chooseVictim"){
+    result.robberVictims=robberVictimCandidates(
+      game.robberHex,
+      player.id
+    ).map(other=>other.id);
+    return result;
+  }
+
+  if(game.phase==="discard"){
+    result.discardNeed=Math.floor(totalResources(player)/2);
+    return result;
+  }
+
+  if(game.phase!=="turn" || game.winner!==null) return result;
+
+  result.canRoll=!game.rolled&&!game.diceRolling;
+  result.canEndTurn=!!game.rolled && game.freeRoads===0 && !game.diceRolling;
+
+  const canBuildNormal=
+    !!game.rolled &&
+    !player.builtThisTurn &&
+    !game.diceRolling;
+
+  const freeRoad=game.freeRoads>0;
+
+  if(
+    freeRoad ||
+    (canBuildNormal && player.pieces.road>0 && hasCost(player,COST.road))
+  ){
+    result.build.road=Object.keys(game.board.edges)
+      .filter(edgeId=>canPlaceRoad(player.id,edgeId));
+  }
+
+  if(
+    canBuildNormal &&
+    player.pieces.settlement>0 &&
+    hasCost(player,COST.settlement)
+  ){
+    result.build.settlement=Object.keys(game.board.vertices)
+      .filter(vertexId=>canPlaceSettlement(player.id,vertexId,false));
+  }
+
+  if(
+    canBuildNormal &&
+    player.pieces.city>0 &&
+    hasCost(player,COST.city)
+  ){
+    result.build.city=[...player.settlements]
+      .filter(vertexId=>canUpgradeCity(player.id,vertexId));
+  }
+
+  result.build.dev=
+    canBuildNormal &&
+    !!game.devDeck.length &&
+    hasCost(player,COST.dev);
+
+  if(game.rolled){
+    for(const give of RESOURCES){
+      const rate=getTradeRate(player,give);
+      if((player.resources[give]||0)<rate) continue;
+      for(const get of RESOURCES){
+        if(give!==get && (game.bank[get]||0)>0){
+          result.bankTrades.push({give,get,rate});
+        }
+      }
+    }
+
+    result.playerTradeTargets=game.players
+      .filter(other=>other.id!==player.id)
+      .map(other=>({
+        id:other.id,
+        name:other.name,
+        resourceTotal:totalResources(other),
+      }));
+  }
+
+  result.playableDev=[...new Set(player.dev||[])];
+
+  if(game.fishermen){
+    for(const action of Object.keys(FISH_ACTION_COST)){
+      const cost=FISH_ACTION_COST[action];
+      if(!findFishPayment(player.fishTokens,cost)) continue;
+      if(action==="removeRobber" && game.robberHex===null) continue;
+      if(
+        action==="steal" &&
+        !game.players.some(other=>other.id!==player.id&&totalResources(other)>0)
+      ) continue;
+      if(action==="resource" && !RESOURCES.some(resource=>game.bank[resource]>0)) continue;
+      if(
+        action==="road" &&
+        (
+          player.pieces.road<=0 ||
+          !Object.keys(game.board.edges).some(edgeId=>canPlaceRoad(player.id,edgeId))
+        )
+      ) continue;
+      if(action==="dev" && !game.devDeck.length) continue;
+      result.fishActions.push(action);
+    }
+  }
+
+  return result;
+}
+
+function cpuAnalysisHumanReceiptId(){
+  if(
+    typeof crypto!=="undefined" &&
+    typeof crypto.randomUUID==="function"
+  ){
+    return `ha-${crypto.randomUUID()}`;
+  }
+  return `ha-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function cpuAnalysisQueueHumanReceipt(player,action,data={}){
+  if(
+    !game ||
+    !player ||
+    !player.human ||
+    !isLocalPlayer(player)
+  ){
+    return null;
+  }
+
+  const receipt={
+    id:cpuAnalysisHumanReceiptId(),
+    schemaVersion:1,
+    at:cpuAnalysisNowIso(),
+    turnSerial:game.turnSerial??null,
+    turnNo:game.turnNo??null,
+    phase:game.phase??null,
+    playerId:player.id,
+    playerName:player.name,
+    action,
+    data:cpuAnalysisClone(data),
+    available:cpuAnalysisAvailableHumanActions(player),
+    visibleState:cpuAnalysisHumanVisibleState(player),
+  };
+
+  if(!Array.isArray(game.analysisReceipts)){
+    game.analysisReceipts=[];
+  }
+  game.analysisReceipts.push(receipt);
+  game.analysisReceipts=game.analysisReceipts.slice(-4);
+  game.analysisReceipt=receipt;
+
+  if(!ONLINE_MODE){
+    cpuAnalysisAcceptServerReceipt(receipt);
+  }
+
+  return receipt;
+}
+
+function cpuAnalysisAcceptServerReceipt(receipt){
+  if(
+    !receipt?.id ||
+    cpuAnalysisAcceptedReceiptIds.has(receipt.id)
+  ){
+    return false;
+  }
+
+  cpuAnalysisAcceptedReceiptIds.add(receipt.id);
+  if(cpuAnalysisAcceptedReceiptIds.size>3000){
+    const keep=[...cpuAnalysisAcceptedReceiptIds].slice(-1500);
+    cpuAnalysisAcceptedReceiptIds.clear();
+    keep.forEach(id=>cpuAnalysisAcceptedReceiptIds.add(id));
+  }
+
+  const player=playerById(receipt.playerId);
+  const event=cpuAnalysisRecordEvent(
+    "human_action",
+    player,
+    {
+      receiptId:receipt.id,
+      action:receipt.action,
+      actionData:cpuAnalysisClone(receipt.data),
+      available:cpuAnalysisClone(receipt.available),
+      visibleState:cpuAnalysisClone(receipt.visibleState),
+      acceptedAt:cpuAnalysisNowIso(),
+    },
+    `human-action:${receipt.id}`
+  );
+  if(event){
+    event.turnSerial=receipt.turnSerial??event.turnSerial;
+    event.turnNo=receipt.turnNo??event.turnNo;
+    event.phase=receipt.phase??event.phase;
+    event.playerId=receipt.playerId??event.playerId;
+    event.playerName=receipt.playerName??event.playerName;
+  }
+  return true;
+}
+
+function cpuAnalysisCompactPlayer(player,focus=false){
+  if(!player) return null;
+  return {
+    id:player.id,
+    name:player.name,
+    human:!!player.human,
+    publicVP:player.publicVP??null,
+    totalVP:focus?(player.totalVP??null):undefined,
+    victoryTarget:focus?(player.victoryTarget??null):undefined,
+    resources:focus&&player.resources?{...player.resources}:undefined,
+    resourceTotal:player.resourceTotal??null,
+    pieces:focus&&player.pieces?{...player.pieces}:undefined,
+    roadCount:Array.isArray(player.roads)?player.roads.length:0,
+    settlementCount:Array.isArray(player.settlements)?player.settlements.length:0,
+    cityCount:Array.isArray(player.cities)?player.cities.length:0,
+    knightsPlayed:player.knightsPlayed??0,
+    hasLongestRoad:!!player.hasLongestRoad,
+    hasLargestArmy:!!player.hasLargestArmy,
+  };
+}
+
+function cpuAnalysisCompactState(state){
+  if(!state) return null;
+  const focusId=state.focusPlayerId??null;
+  return {
+    turnSerial:state.turnSerial??null,
+    turnNo:state.turnNo??null,
+    current:state.current??null,
+    phase:state.phase??null,
+    rolled:!!state.rolled,
+    dice:Array.isArray(state.dice)?[...state.dice]:[],
+    robberHex:state.robberHex??null,
+    focusPlayerId:focusId,
+    players:(state.players||[]).map(player=>
+      cpuAnalysisCompactPlayer(player,player.id===focusId)
+    ),
+  };
+}
+
+function cpuAnalysisCompactFinalState(state){
+  if(!state) return null;
+  return {
+    turnSerial:state.turnSerial??null,
+    turnNo:state.turnNo??null,
+    current:state.current??null,
+    phase:state.phase??null,
+    robberHex:state.robberHex??null,
+    bank:state.bank?{...state.bank}:null,
+    players:(state.players||[]).map(player=>({
+      id:player.id,
+      name:player.name,
+      human:!!player.human,
+      publicVP:player.publicVP??null,
+      totalVP:player.totalVP??null,
+      victoryTarget:player.victoryTarget??null,
+      resources:player.resources?{...player.resources}:null,
+      pieces:player.pieces?{...player.pieces}:null,
+      roads:Array.isArray(player.roads)?[...player.roads]:[],
+      settlements:Array.isArray(player.settlements)?[...player.settlements]:[],
+      cities:Array.isArray(player.cities)?[...player.cities]:[],
+      knightsPlayed:player.knightsPlayed??0,
+      hasLongestRoad:!!player.hasLongestRoad,
+      hasLargestArmy:!!player.hasLargestArmy,
+    })),
+  };
+}
+
+function cpuAnalysisCompactCandidate(candidate){
+  if(!candidate) return null;
+  return {
+    rank:candidate.rank??null,
+    key:candidate.key??null,
+    kind:candidate.kind??null,
+    targetId:candidate.targetId??null,
+    expansionTargetId:candidate.expansionTargetId??null,
+    roadsNeeded:candidate.roadsNeeded??null,
+    strategicScore:candidate.strategicScore??null,
+    scoreComponents:candidate.scoreComponents?{...candidate.scoreComponents}:null,
+    distance:candidate.distance??null,
+    eta:candidate.eta??null,
+    missing:candidate.missing??null,
+    buildable:!!candidate.buildable,
+    contest:candidate.contest?{
+      opponentDistance:candidate.contest.opponentDistance??null,
+      urgencyBonus:candidate.contest.urgencyBonus??null,
+      hopelessPenalty:candidate.contest.hopelessPenalty??null,
+    }:null,
+    lookaheadScore:candidate.lookaheadScore??null,
+    lookaheadBonus:candidate.lookaheadBonus??null,
+  };
+}
+
+function cpuAnalysisCompactEvent(event){
+  const data=event?.data||{};
+  const base={
+    seq:event?.seq??null,
+    at:event?.at??null,
+    type:event?.type??null,
+    turnSerial:event?.turnSerial??null,
+    turnNo:event?.turnNo??null,
+    phase:event?.phase??null,
+    currentPlayerId:event?.currentPlayerId??null,
+    playerId:event?.playerId??null,
+    playerName:event?.playerName??null,
+  };
+
+  if(event?.type==="goal_decision"){
+    return {
+      ...base,
+      data:{
+        stage:data.stage??null,
+        selectedKey:data.selectedKey??null,
+        bestScoreKey:data.bestScoreKey??null,
+        selectionReason:data.selectionReason??null,
+        scoreGapFromBest:data.scoreGapFromBest??null,
+        selected:cpuAnalysisCompactCandidate(data.selected),
+        candidates:(data.candidates||[]).slice(0,2).map(cpuAnalysisCompactCandidate),
+        state:cpuAnalysisCompactState(data.state),
+      },
+    };
+  }
+
+  if(event?.type==="human_action"){
+    return {
+      ...base,
+      data:{
+        receiptId:data.receiptId??null,
+        action:data.action??null,
+        actionData:cpuAnalysisClone(data.actionData),
+        available:cpuAnalysisClone(data.available),
+        visibleState:cpuAnalysisClone(data.visibleState),
+        acceptedAt:data.acceptedAt??null,
+      },
+    };
+  }
+
+  if(event?.type==="cpu_action"){
+    const compact=cpuAnalysisClone(data)||{};
+    delete compact.stateAfter;
+    return {...base,data:compact};
+  }
+
+  if(event?.type==="turn_start"){
+    return null;
+  }
+
+  if(
+    event?.type==="setup_settlement_decision" ||
+    event?.type==="setup_road_decision"
+  ){
+    return {
+      ...base,
+      data:{
+        selectedVertexId:data.selectedVertexId??null,
+        selectedEdgeId:data.selectedEdgeId??null,
+        candidates:(data.candidates||[]).slice(0,5).map(item=>({
+          rank:item.rank??null,
+          vertexId:item.vertexId??null,
+          edgeId:item.edgeId??null,
+          score:item.score??null,
+          baseScore:item.baseScore??null,
+          pairPotential:item.pairPotential??null,
+        })),
+        state:cpuAnalysisCompactState(data.state),
+      },
+    };
+  }
+
+  const copy=cpuAnalysisClone(data)||{};
+  if(copy.state) copy.state=cpuAnalysisCompactState(copy.state);
+  if(copy.stateBefore) copy.stateBefore=cpuAnalysisCompactState(copy.stateBefore);
+  if(copy.stateAfter) copy.stateAfter=cpuAnalysisCompactState(copy.stateAfter);
+  if(Array.isArray(copy.candidates)) copy.candidates=copy.candidates.slice(0,3);
+  if(Array.isArray(copy.rejected)) copy.rejected=copy.rejected.slice(0,3);
+  return {...base,data:copy};
+}
+
+function cpuAnalysisBuildServerPayload(record){
+  if(!record) return null;
+  const compactEvents=(record.events||[])
+    .map(cpuAnalysisCompactEvent)
+    .filter(Boolean);
+  const cpuDecisionCount=compactEvents.filter(event=>
+    event.type && event.type!=="human_action" &&
+    (
+      event.type.endsWith("_decision") ||
+      event.type==="cpu_action"
+    )
+  ).length;
+  const humanDecisionCount=compactEvents.filter(event=>event.type==="human_action").length;
+
+  return {
+    serverCompactVersion:CPU_ANALYSIS_SERVER_COMPACT_VERSION,
+    schemaVersion:record.schemaVersion,
+    appVersion:record.appVersion,
+    cpuLogicVersion:record.cpuLogicVersion||CPU_ANALYSIS_LOGIC_VERSION,
+    matchId:record.matchId,
+    startedAt:record.startedAt,
+    updatedAt:record.updatedAt,
+    meta:{
+      roomId:record.meta?.roomId??null,
+      gameSessionId:record.meta?.gameSessionId??null,
+      playerCount:record.meta?.playerCount??null,
+      fishermen:!!record.meta?.fishermen,
+      players:cpuAnalysisClone(record.meta?.players||[]),
+      scoringFormula:cpuAnalysisClone(record.meta?.scoringFormula||null),
+      board:cpuAnalysisClone(record.meta?.board||null),
+    },
+    counts:{
+      events:compactEvents.length,
+      cpuDecisions:cpuDecisionCount,
+      humanDecisions:humanDecisionCount,
+    },
+    events:compactEvents,
+    result:record.result?{
+      status:record.result.status,
+      endedAt:record.result.endedAt,
+      winnerId:record.result.winnerId,
+      winnerName:record.result.winnerName,
+      turns:record.result.turns,
+      turnSerial:record.result.turnSerial,
+      finalState:cpuAnalysisCompactFinalState(record.result.finalState),
+      diceHistory:cpuAnalysisClone(record.result.diceHistory||[]),
+    }:null,
+  };
+}
+
+
+function cpuAnalysisFitServerPayload(payload){
+  if(!payload) return null;
+
+  const encoder=
+    typeof TextEncoder!=="undefined"
+      ?new TextEncoder()
+      :null;
+
+  const byteLength=value=>{
+    const raw=JSON.stringify(value);
+    return encoder
+      ?encoder.encode(raw).byteLength
+      :raw.length;
+  };
+
+  let bytes=byteLength(payload);
+
+  if(bytes<=1_050_000){
+    payload.counts.serverBytes=bytes;
+    payload.counts.compactionLevel=1;
+    return payload;
+  }
+
+  // 長い対戦だけさらに軽量化。選択結果は残し、
+  // 非選択候補と重複stateを減らす。
+  for(const event of payload.events||[]){
+    const data=event.data||{};
+    if(Array.isArray(data.candidates)){
+      data.candidates=data.candidates.slice(0,1);
+    }
+    if(Array.isArray(data.rejected)){
+      data.rejected=[];
+    }
+    if(event.type!=="human_action"){
+      delete data.stateBefore;
+      delete data.stateAfter;
+    }
+  }
+
+  bytes=byteLength(payload);
+  payload.counts.serverBytes=bytes;
+  payload.counts.compactionLevel=2;
+
+  if(bytes<=1_150_000){
+    return payload;
+  }
+
+  // 最終保険。判断そのもの・人間行動・実行CPU行動は残し、
+  // 重複しやすい補助判断イベントだけ間引く。
+  payload.events=(payload.events||[]).filter((event,index)=>{
+    if(
+      event.type==="human_action" ||
+      event.type==="cpu_action" ||
+      event.type==="goal_decision" ||
+      event.type==="setup_settlement_decision" ||
+      event.type==="setup_road_decision" ||
+      event.type==="robber_decision"
+    ){
+      return true;
+    }
+
+    if(
+      event.type==="player_trade_decision" ||
+      event.type==="bank_trade_decision" ||
+      event.type==="development_decision" ||
+      event.type==="fish_decision" ||
+      event.type==="discard_decision"
+    ){
+      return index%2===0;
+    }
+
+    return true;
+  });
+
+  bytes=byteLength(payload);
+  payload.counts.serverBytes=bytes;
+  payload.counts.compactionLevel=3;
+  payload.counts.events=payload.events.length;
+  return payload;
+}
+
+async function cpuAnalysisTryServerUpload(record=null){
+  if(
+    typeof window.cpuAnalysisServerUpload!=="function" ||
+    (typeof isOnlineHost==="function" && !isOnlineHost())
+  ){
+    return false;
+  }
+
+  const target=record||cpuAnalysisSession;
+  if(!target?.result || target.result.status!=="finished") return false;
+  if(target.serverUpload?.status==="saved") return true;
+
+  if(
+    target.meta &&
+    !target.meta.gameSessionId &&
+    typeof onlineRoomState!=="undefined"
+  ){
+    target.meta.gameSessionId=onlineRoomState?.gameSessionId??null;
+  }
+
+  const payload=cpuAnalysisFitServerPayload(
+    cpuAnalysisBuildServerPayload(target)
+  );
+  if(!payload) return false;
+
+  target.serverUpload={
+    ...(target.serverUpload||{}),
+    status:"uploading",
+    attemptedAt:cpuAnalysisNowIso(),
+  };
+  await cpuAnalysisPersistRecord(target);
+
+  try{
+    const result=await window.cpuAnalysisServerUpload(payload);
+    target.serverUpload={
+      status:"saved",
+      savedAt:cpuAnalysisNowIso(),
+      duplicate:!!result?.duplicate,
+      bytes:result?.bytes??null,
+    };
+    await cpuAnalysisPersistRecord(target);
+    return true;
+  }catch(error){
+    target.serverUpload={
+      status:"pending",
+      attemptedAt:cpuAnalysisNowIso(),
+      error:String(error?.message||error||"upload failed").slice(0,240),
+    };
+    await cpuAnalysisPersistRecord(target);
+    return false;
+  }
+}
+
+function cpuAnalysisQueueServerUpload(){
+  clearTimeout(cpuAnalysisServerUploadTimer);
+  cpuAnalysisServerUploadTimer=setTimeout(async()=>{
+    cpuAnalysisServerUploadTimer=null;
+    await cpuAnalysisPersistSession(false);
+    if(cpuAnalysisSession){
+      await cpuAnalysisTryServerUpload(cpuAnalysisSession);
+      if(
+        $("cpuAnalysisModal") &&
+        !$("cpuAnalysisModal").classList.contains("hidden")
+      ){
+        cpuAnalysisRefreshUi();
+      }
+    }
+  },1500);
+}
+
+async function cpuAnalysisRetryPendingUploads(){
+  if(
+    typeof window.cpuAnalysisServerUpload!=="function" ||
+    (typeof isOnlineHost==="function" && !isOnlineHost())
+  ){
+    return;
+  }
+  const records=await cpuAnalysisGetMatches();
+  for(const record of records.slice(0,CPU_ANALYSIS_MAX_MATCHES)){
+    if(
+      record.result?.status==="finished" &&
+      record.serverUpload?.status!=="saved"
+    ){
+      await cpuAnalysisTryServerUpload(record);
+    }
+  }
+}
+
 function cpuAnalysisMakeMatchId(){
   const suffix=(
     typeof crypto!=="undefined" &&
@@ -341,11 +1017,13 @@ function cpuAnalysisEnsureSession(player=null){
   cpuAnalysisSession={
     schemaVersion:CPU_ANALYSIS_SCHEMA_VERSION,
     appVersion:CPU_ANALYSIS_APP_VERSION,
+    cpuLogicVersion:CPU_ANALYSIS_LOGIC_VERSION,
     matchId:cpuAnalysisMakeMatchId(),
     startedAt:cpuAnalysisNowIso(),
     updatedAt:cpuAnalysisNowIso(),
     meta:{
       roomId:game.roomId??null,
+      gameSessionId:(typeof onlineRoomState!=="undefined" ? onlineRoomState?.gameSessionId : null)??null,
       playerCount:game.playerCount,
       fishermen:!!game.fishermen,
       boardSignature,
@@ -359,7 +1037,7 @@ function cpuAnalysisEnsureSession(player=null){
         goal:"base + boardScore*0.68 + outcomeValue + contestAdjustment - distance*4.4 - eta*7.2 + lookaheadBonus",
         lookaheadDepthNormal:4,
         lookaheadDepthEndgame:5,
-        note:"v1.52時点のCPU評価式。選択されなかった候補も保存。",
+        note:"v1.53解析収集基盤。CPUロジック自体はv1.52から変更なし。",
       },
     },
     events:[],
@@ -545,6 +1223,7 @@ function cpuAnalysisFinalizeMatch(winner=null){
   };
   cpuAnalysisSession.updatedAt=cpuAnalysisSession.result.endedAt;
   cpuAnalysisPersistSession(true);
+  cpuAnalysisQueueServerUpload();
 }
 
 function cpuAnalysisAbandonCurrent(reason="new_game"){
@@ -836,6 +1515,79 @@ async function cpuAnalysisExportAll(){
   return true;
 }
 
+
+async function cpuAnalysisRefreshServerUi(){
+  const status=$("cpuAnalysisServerStatus");
+  if(!status) return;
+
+  if(typeof window.cpuAnalysisServerStats!=="function"){
+    status.textContent="サーバー解析：利用できません";
+    return;
+  }
+
+  status.textContent="サーバー解析：確認中...";
+  try{
+    const data=await window.cpuAnalysisServerStats();
+    const stats=data.stats||{};
+    status.textContent=
+      `サーバー保存ゲーム：${stats.games||0}件`+
+      `｜CPU判断：${stats.cpuDecisions||0}`+
+      `｜人間判断：${stats.humanDecisions||0}`+
+      `｜保存量：約${Math.round((stats.bytes||0)/1024)}KB`;
+  }catch(error){
+    status.textContent=
+      `サーバー解析：${String(error?.message||error||"取得失敗")}`;
+  }
+}
+
+async function cpuAnalysisExportServerAll(){
+  if(
+    typeof window.cpuAnalysisServerList!=="function" ||
+    typeof window.cpuAnalysisServerFetchMatch!=="function"
+  ){
+    return false;
+  }
+
+  const status=$("cpuAnalysisServerStatus");
+  try{
+    if(status) status.textContent="サーバー解析：一括JSONを取得中...";
+    const listData=await window.cpuAnalysisServerList();
+    const items=listData.matches||[];
+    const matches=[];
+
+    for(let index=0;index<items.length;index++){
+      if(status){
+        status.textContent=
+          `サーバー解析：${index+1}/${items.length}件を取得中...`;
+      }
+      const result=await window.cpuAnalysisServerFetchMatch(items[index].matchId);
+      if(result?.match) matches.push(result.match);
+    }
+
+    cpuAnalysisSaveText(
+      `catan_cpu_server_all_${Date.now()}.json`,
+      JSON.stringify({
+        schemaVersion:CPU_ANALYSIS_SCHEMA_VERSION,
+        appVersion:CPU_ANALYSIS_APP_VERSION,
+        cpuLogicVersion:CPU_ANALYSIS_LOGIC_VERSION,
+        exportedAt:cpuAnalysisNowIso(),
+        source:"cloudflare-analysis-store",
+        matches,
+      },null,2),
+      "application/json;charset=utf-8"
+    );
+
+    await cpuAnalysisRefreshServerUi();
+    return true;
+  }catch(error){
+    if(status){
+      status.textContent=
+        `サーバー解析：一括出力失敗 - ${String(error?.message||error)}`;
+    }
+    return false;
+  }
+}
+
 function cpuAnalysisFormatStartedAt(value){
   if(!value) return "日時不明";
   const date=new Date(value);
@@ -849,7 +1601,7 @@ async function cpuAnalysisRefreshUi(){
   if(!list || !status) return;
   const records=await cpuAnalysisGetMatches();
   const currentEvents=cpuAnalysisSession?.events?.length||0;
-  status.textContent=`保存対戦：${records.length}件${cpuAnalysisSession&&!cpuAnalysisSession.result?`｜現在記録中：${currentEvents}イベント`:""}`;
+  status.textContent=`ローカル保存：${records.length}件${cpuAnalysisSession&&!cpuAnalysisSession.result?`｜現在記録中：${currentEvents}イベント`:""}`;
   if(!records.length){
     list.innerHTML='<p class="cpu-analysis-empty">まだCPU解析データはありません。</p>';
     return;
@@ -883,6 +1635,8 @@ function cpuAnalysisOpenModal(){
   if(!modal) return;
   modal.classList.remove("hidden");
   cpuAnalysisRefreshUi();
+  cpuAnalysisRefreshServerUi();
+  cpuAnalysisRetryPendingUploads();
 }
 
 function cpuAnalysisCloseModal(){
@@ -906,6 +1660,30 @@ function initCpuAnalysisUi(){
     if(records[0]) cpuAnalysisExportMatch(records[0].matchId,"csv");
   });
   $("cpuAnalysisExportAllJson")?.addEventListener("click",cpuAnalysisExportAll);
+  $("cpuAnalysisExportServerAllJson")?.addEventListener(
+    "click",
+    cpuAnalysisExportServerAll
+  );
+  $("cpuAnalysisRetryUpload")?.addEventListener("click",async()=>{
+    await cpuAnalysisRetryPendingUploads();
+    await cpuAnalysisRefreshUi();
+    await cpuAnalysisRefreshServerUi();
+  });
+  $("cpuAnalysisClearServer")?.addEventListener("click",async()=>{
+    if(
+      typeof window.cpuAnalysisServerClear!=="function" ||
+      !confirm("サーバーに保存されたカタン解析ログをすべて削除しますか？")
+    ){
+      return;
+    }
+    try{
+      await window.cpuAnalysisServerClear();
+      await cpuAnalysisRefreshServerUi();
+    }catch(error){
+      const status=$("cpuAnalysisServerStatus");
+      if(status) status.textContent=`サーバー解析：削除失敗 - ${String(error?.message||error)}`;
+    }
+  });
   $("cpuAnalysisClearAll")?.addEventListener("click",async()=>{
     if(!confirm("保存済みのCPU解析データをすべて削除しますか？")) return;
     await cpuAnalysisClearAll();
@@ -2350,6 +3128,12 @@ function setupClickVertex(vertexId){
         return;
       }
 
+      cpuAnalysisQueueHumanReceipt(
+        player,
+        "setup_settlement",
+        {vertexId}
+      );
+
       placeSettlement(
         player.id,
         vertexId,
@@ -2408,6 +3192,12 @@ function setupClickEdge(edgeId){
         render();
         return;
       }
+
+      cpuAnalysisQueueHumanReceipt(
+        player,
+        "setup_road",
+        {edgeId}
+      );
 
       game.board.edges[edgeId].road=player.id;
       player.roads.push(edgeId);
@@ -2645,7 +3435,9 @@ function scheduleFinalResultIfNeeded(){
 
 function rollDice(){
   if(game.winner || game.phase!=="turn" || !isLocalTurn() || game.rolled || game.diceRolling) return;
-  animateDiceRoll(currentPlayer().id,()=>{});
+  const player=currentPlayer();
+  cpuAnalysisQueueHumanReceipt(player,"roll_dice",{});
+  animateDiceRoll(player.id,()=>{});
 }
 
 function animateDiceRoll(playerId,afterResolve){
@@ -6119,6 +6911,14 @@ function confirmDiscard(){
   if(!discardSelection || selectedDiscardCount()!==discardSelection.need) return;
   const player=playerById(discardSelection.playerId);
   if(!isLocalPlayer(player)) return;
+  cpuAnalysisQueueHumanReceipt(
+    player,
+    "discard_on_seven",
+    {
+      need:discardSelection.need,
+      selected:{...discardSelection.selected},
+    }
+  );
   const removed={};
   for(const r of RESOURCES){
     const n=discardSelection.selected[r];
@@ -6250,6 +7050,14 @@ function canRobberStealFrom(
 
 function finishRobberMove(playerId,victimId=null){
   if(victimId!==null){
+    const mover=playerById(playerId);
+    if(mover?.human && isLocalPlayer(mover)){
+      cpuAnalysisQueueHumanReceipt(
+        mover,
+        "robber_victim",
+        {hexId:game.robberHex??null,victimId}
+      );
+    }
     if(
       canRobberStealFrom(
         playerId,
@@ -6300,6 +7108,14 @@ function finishRobberMove(playerId,victimId=null){
 
 function moveRobberTo(hexId,playerId){
   if(hexId===game.robberHex) return false;
+  const mover=playerById(playerId);
+  if(mover?.human && isLocalPlayer(mover)){
+    cpuAnalysisQueueHumanReceipt(
+      mover,
+      "move_robber",
+      {fromHexId:game.robberHex??null,toHexId:hexId}
+    );
+  }
   game.robberHex=hexId;
 
   const candidates=
@@ -6658,6 +7474,7 @@ function setBuildMode(mode){
       log(`発展カードを買えません。不足：${missingCostText(p,COST.dev)}`);
       return;
     }
+    cpuAnalysisQueueHumanReceipt(p,"buy_development",{});
     buyDev(p.id); checkVictory(); render(); return;
   }
   game.buildMode=mode; render();
@@ -6702,6 +7519,12 @@ function normalClickVertex(vertexId){
           render();
           return;
         }
+
+        cpuAnalysisQueueHumanReceipt(
+          player,
+          "build_settlement",
+          {vertexId}
+        );
 
         payCost(
           player,
@@ -6754,6 +7577,11 @@ function normalClickVertex(vertexId){
           return;
         }
 
+        cpuAnalysisQueueHumanReceipt(
+          player,
+          "build_city",
+          {vertexId}
+        );
         placeCity(player.id,vertexId);
         player.builtThisTurn=true;
         game.buildMode=null;
@@ -6813,6 +7641,12 @@ function normalClickEdge(edgeId){
         return;
       }
 
+      cpuAnalysisQueueHumanReceipt(
+        player,
+        stillFree?"build_road_free":"build_road",
+        {edgeId,free:stillFree}
+      );
+
       placeRoad(
         player.id,
         edgeId,
@@ -6868,6 +7702,11 @@ function bankTrade(){
   const rate=getTradeRate(p,give);
   if(p.resources[give]<rate){ log(`${RESOURCE_JA[give]}が${rate}枚必要です。`); return; }
   if(game.bank[get]<1){ log("銀行に希望資源がありません。"); return; }
+  cpuAnalysisQueueHumanReceipt(
+    p,
+    "bank_trade",
+    {give,get,rate}
+  );
   p.resources[give]-=rate; game.bank[give]+=rate;
   p.resources[get]++; game.bank[get]--;
   showResourceDelta(p.id,{[give]:-rate,[get]:1},"銀行・港交易");
@@ -7626,6 +8465,16 @@ function submitPlayerTrade(){
 
   const give=deepClone(tradeDraft.give);
   const get=deepClone(tradeDraft.get);
+  cpuAnalysisQueueHumanReceipt(
+    player,
+    "player_trade_proposal",
+    {
+      targetId:target.id,
+      targetName:target.name,
+      give,
+      get,
+    }
+  );
   closeTradeModal();
 
   if(ONLINE_MODE && target.human){
@@ -7741,6 +8590,19 @@ function chooseVictim(playerId){
 
 function executeFishAction(action,target,payment){
   const p=currentPlayer(),cost=FISH_ACTION_COST[action];
+  if(p?.human && isLocalPlayer(p)){
+    cpuAnalysisQueueHumanReceipt(
+      p,
+      "fish_action",
+      {
+        action,
+        target:cpuAnalysisClone(target),
+        cost,
+        paymentIndices:[...(payment.indices||[])],
+        paymentTotal:payment.total??cost,
+      }
+    );
+  }
   spendFish(p,payment.indices,cost,{
     removeRobber:"🐱を盤外へ",
     steal:"資源強奪",
@@ -8067,7 +8929,14 @@ function transferOldBootHuman(){
     title:"ボロ靴を渡す",
     guide:"自分と同点以上の勝利点を持つ相手を選択してください。",
     options:playerChoiceOptions(candidates,player=>`勝利点 ${publicVP(player)}点`),
-    onSelect:targetId=>transferOldBoot(p.id,targetId),
+    onSelect:targetId=>{
+      cpuAnalysisQueueHumanReceipt(
+        p,
+        "transfer_old_boot",
+        {targetId}
+      );
+      transferOldBoot(p.id,targetId);
+    },
     allowCancel:true,
   });
 }
@@ -8366,6 +9235,11 @@ function removeDevCard(player,card){
 
 function chooseYearOfPlentyResources(player,selected=[]){
   if(selected.length>=2){
+    cpuAnalysisQueueHumanReceipt(
+      player,
+      "play_development",
+      {card:"yearOfPlenty",resources:[...selected]}
+    );
     if(!removeDevCard(player,"yearOfPlenty")) return;
     queueAwardEvent("devDiscovery",player.id);
     const delta={};
@@ -8406,6 +9280,11 @@ function playDev(card){
       "独占",
       "全プレイヤーから集める資源を選択してください。",
       resource=>{
+        cpuAnalysisQueueHumanReceipt(
+          p,
+          "play_development",
+          {card:"monopoly",resource}
+        );
         if(!removeDevCard(p,"monopoly")) return;
         queueAwardEvent("devMonopoly",p.id);
         let amount=0;
@@ -8432,6 +9311,11 @@ function playDev(card){
     return;
   }
 
+  cpuAnalysisQueueHumanReceipt(
+    p,
+    "play_development",
+    {card}
+  );
   if(!removeDevCard(p,card)) return;
   if(card==="vp"){
     queueAwardEvent("devVictoryPoint",p.id);
@@ -8458,6 +9342,7 @@ function playDev(card){
 function endTurn(){
   const p=currentPlayer();
   if(!isLocalPlayer(p) || game.phase!=="turn" || !game.rolled || game.freeRoads>0 || game.winner || game.diceRolling) return;
+  cpuAnalysisQueueHumanReceipt(p,"end_turn",{});
   finishActivePhase();
 }
 
@@ -11081,6 +11966,19 @@ function resolveOnlineTrade(accepted){
     to,
     trade.give,
     trade.get
+  );
+
+  cpuAnalysisQueueHumanReceipt(
+    to,
+    "player_trade_response",
+    {
+      fromId:from?.id??null,
+      fromName:from?.name??null,
+      accepted:!!accepted,
+      valid:!!valid,
+      give:cpuAnalysisClone(trade.give),
+      get:cpuAnalysisClone(trade.get),
+    }
   );
 
   game.pendingTrade=null;

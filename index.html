@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.52（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.52">
+  <title>カタン オンライン v1.53（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.53">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.52</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.53</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -70,7 +70,7 @@
   <div id="desktopFitStage" class="desktop-fit-stage">
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.52</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.53</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
@@ -319,18 +319,28 @@
       <div class="cpu-analysis-heading">
         <div>
           <h2 id="cpuAnalysisTitle">CPU解析データ</h2>
-          <p>CPUが選んだ行動だけでなく、選ばなかった候補・評価点・ETA・先読み補正・交易候補までローカル保存します。</p>
+          <p>CPU判断と人間の正式行動をホストPCへ記録し、対戦終了時だけCloudflareへ1回まとめて保存します。</p>
         </div>
         <button id="cpuAnalysisCloseBtn" type="button" class="secondary cpu-analysis-close" aria-label="CPU解析を閉じる">×</button>
       </div>
-      <div id="cpuAnalysisStatus" class="cpu-analysis-status">解析データを確認中...</div>
+      <div id="cpuAnalysisStatus" class="cpu-analysis-status">ローカル解析データを確認中...</div>
       <div class="cpu-analysis-main-actions">
         <button id="cpuAnalysisExportLatestJson" type="button">最新対戦 JSON</button>
         <button id="cpuAnalysisExportLatestCsv" type="button" class="secondary">最新スコア表 CSV</button>
-        <button id="cpuAnalysisExportAllJson" type="button" class="secondary">全対戦 JSON</button>
-        <button id="cpuAnalysisClearAll" type="button" class="danger">全データ削除</button>
+        <button id="cpuAnalysisExportAllJson" type="button" class="secondary">ローカル全対戦 JSON</button>
+        <button id="cpuAnalysisClearAll" type="button" class="danger">ローカル全削除</button>
       </div>
-      <p class="cpu-analysis-guide">私に渡す場合は <strong>JSON</strong> が最も詳しく解析できます。CSVは候補スコアを表計算ソフトで見る用途です。</p>
+
+      <div class="cpu-analysis-server-box">
+        <div id="cpuAnalysisServerStatus" class="cpu-analysis-status">サーバー解析：確認中...</div>
+        <div class="cpu-analysis-main-actions">
+          <button id="cpuAnalysisExportServerAllJson" type="button">サーバーJSON一括出力</button>
+          <button id="cpuAnalysisRetryUpload" type="button" class="secondary">未送信を再送</button>
+          <button id="cpuAnalysisClearServer" type="button" class="danger">サーバー解析ログ削除</button>
+        </div>
+      </div>
+
+      <p class="cpu-analysis-guide">CPU改善用に渡す場合は <strong>サーバーJSON一括出力</strong> が便利です。ゲーム中の詳細ログはホストPCのIndexedDBへ保存し、終了時だけ軽量化した1試合分をWorkerへ送ります。</p>
       <div id="cpuAnalysisMatchList" class="cpu-analysis-match-list"></div>
     </div>
   </div>
@@ -347,8 +357,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.52"></script>
-  <script src="online.js?version=v1.52"></script>
-  <script src="game.js?version=v1.52"></script>
+  <script src="config.js?version=v1.53"></script>
+  <script src="online.js?version=v1.53"></script>
+  <script src="game.js?version=v1.53"></script>
 </body>
 </html>

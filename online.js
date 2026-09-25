@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.52";
+const APP_VERSION = "v1.53";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -255,6 +255,111 @@ function scheduleCpuIfNeeded(){
     scheduleCpu();
   }
 }
+
+
+function analysisAdminName(){
+  return String(
+    commonSavedName() ||
+    localStorage.getItem(ACTIVE_NAME_KEY) ||
+    currentOnlineName() ||
+    ""
+  ).trim().slice(0,32);
+}
+
+async function analysisFetchJson(path,options={}){
+  if(!SERVER_ORIGIN) throw new Error("Worker URLが未設定です。");
+  const response=await fetch(
+    `${SERVER_ORIGIN}${path}`,
+    {
+      cache:"no-store",
+      ...options,
+      headers:{
+        ...(options.body?{"Content-Type":"application/json"}:{}),
+        ...(options.headers||{}),
+      },
+    }
+  );
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok){
+    throw new Error(
+      data.error ||
+      data.message ||
+      `解析サーバー HTTP ${response.status}`
+    );
+  }
+  return data;
+}
+
+window.cpuAnalysisServerUpload=async function(match){
+  if(!isOnlineHost()){
+    throw new Error("解析ログの送信はホストのみです。");
+  }
+  const roomId=onlineRoomState?.roomId||onlineRoomId;
+  const gameSessionId=onlineRoomState?.gameSessionId||match?.meta?.gameSessionId;
+  if(!roomId || !gameSessionId || !onlineClientId){
+    throw new Error("解析ログ送信に必要なROOM情報がありません。");
+  }
+  return analysisFetchJson(
+    "/analysis/upload",
+    {
+      method:"POST",
+      body:JSON.stringify({
+        roomId,
+        gameSessionId,
+        clientId:onlineClientId,
+        match,
+      }),
+    }
+  );
+};
+
+window.cpuAnalysisServerStats=async function(){
+  const name=analysisAdminName();
+  if(!name) throw new Error("プレイヤー名を入力してください。");
+  return analysisFetchJson(
+    `/analysis/stats?name=${encodeURIComponent(name)}`
+  );
+};
+
+window.cpuAnalysisServerList=async function(){
+  const name=analysisAdminName();
+  if(!name) throw new Error("プレイヤー名を入力してください。");
+  return analysisFetchJson(
+    `/analysis/list?name=${encodeURIComponent(name)}`
+  );
+};
+
+window.cpuAnalysisServerFetchMatch=async function(matchId){
+  const name=analysisAdminName();
+  if(!name) throw new Error("プレイヤー名を入力してください。");
+  return analysisFetchJson(
+    `/analysis/game?name=${encodeURIComponent(name)}&matchId=${encodeURIComponent(matchId)}`
+  );
+};
+
+window.cpuAnalysisServerDeleteMatch=async function(matchId){
+  const name=analysisAdminName();
+  if(!name) throw new Error("プレイヤー名を入力してください。");
+  return analysisFetchJson(
+    "/analysis/delete",
+    {
+      method:"POST",
+      body:JSON.stringify({name,matchId}),
+    }
+  );
+};
+
+window.cpuAnalysisServerClear=async function(){
+  const name=analysisAdminName();
+  if(!name) throw new Error("プレイヤー名を入力してください。");
+  return analysisFetchJson(
+    "/analysis/clear",
+    {
+      method:"POST",
+      body:JSON.stringify({name}),
+    }
+  );
+};
 
 function wsOrigin(){
   return SERVER_ORIGIN.replace(/^http:/,"ws:").replace(/^https:/,"wss:");
@@ -1021,6 +1126,18 @@ function receiveRoomState(state){
 
   renderOnlineLobby();
   if(state.phase==="playing" && state.game){
+    if(
+      isOnlineHost() &&
+      typeof cpuAnalysisAcceptServerReceipt==="function"
+    ){
+      const receipts=Array.isArray(state.game.analysisReceipts)
+        ?state.game.analysisReceipts
+        :(state.game.analysisReceipt?[state.game.analysisReceipt]:[]);
+      receipts.forEach(receipt=>
+        cpuAnalysisAcceptServerReceipt(receipt)
+      );
+    }
+
     const hadActiveGame=!!game;
     const remoteSyncRevision=Number(state.game.syncRevision)||0;
     const localSyncRevision=Number(game?.syncRevision)||0;
@@ -1072,6 +1189,12 @@ function receiveRoomState(state){
       handleOnlinePendingUI();
       scheduleCpuIfNeeded();
       requestStaleDiceRecovery();
+      if(
+        isOnlineHost() &&
+        typeof cpuAnalysisRetryPendingUploads==="function"
+      ){
+        cpuAnalysisRetryPendingUploads();
+      }
       return;
     }
 
@@ -1144,6 +1267,13 @@ function receiveRoomState(state){
       Workerへ安全な復旧を要求する。
     */
     requestStaleDiceRecovery();
+
+    if(
+      isOnlineHost() &&
+      typeof cpuAnalysisRetryPendingUploads==="function"
+    ){
+      cpuAnalysisRetryPendingUploads();
+    }
   }else{
     game=null;
     closeChoiceModal();

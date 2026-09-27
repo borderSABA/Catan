@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.55";
+const APP_VERSION = "v1.56";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -1854,14 +1854,53 @@ function startOnlineGame(){
 }
 
 function leaveOnlineRoom(){
+  const roomId=onlineRoomId;
+  const playerName=String(
+    localStorage.getItem(ACTIVE_NAME_KEY) ||
+    currentOnlineName() ||
+    ""
+  ).trim().slice(0,32);
+
+  const playing=
+    onlineRoomState?.phase==="playing" ||
+    !!game;
+
+  const roomNo=ROOM_IDS.indexOf(roomId)+1;
+  const message=playing
+    ?`ROOM ${roomNo>0?roomNo:"?"} の対戦から退室しますか？\n\n退室後もこの端末には再接続情報を残します。タイトル画面の「対戦へ再接続」から戻れます。`
+    :`ROOM ${roomNo>0?roomNo:"?"} から退室しますか？`;
+
+  if(!window.confirm(message)) return;
+
+  /*
+    v1.56:
+    対戦中の退室は「完全離脱」ではなく一時切断として扱う。
+    Worker側はplaying中のmemberをconnected=falseで保持するため、
+    ACTIVE_ROOM / ACTIVE_NAME / ROOM tokenを残せば同一clientIdで再接続できる。
+
+    ロビー退室は従来どおり完全退出としてACTIVE情報を削除する。
+  */
+  if(playing && ROOM_IDS.includes(roomId) && playerName){
+    localStorage.setItem(ACTIVE_ROOM_KEY,roomId);
+    localStorage.setItem(ACTIVE_NAME_KEY,playerName);
+  }else{
+    localStorage.removeItem(ACTIVE_ROOM_KEY);
+    localStorage.removeItem(ACTIVE_NAME_KEY);
+  }
+
+  clearTimeout(reconnectTimer);
+
+  if(onlineSocket?.readyState===WebSocket.OPEN){
+    onlineSend({type:"leave"});
+  }
+
+  const socket=onlineSocket;
   onlineRoomId=null;
   onlineClientId=null;
-  localStorage.removeItem(ACTIVE_ROOM_KEY);
-  localStorage.removeItem(ACTIVE_NAME_KEY);
-  clearTimeout(reconnectTimer);
-  if(onlineSocket?.readyState===WebSocket.OPEN) onlineSend({type:"leave"});
-  onlineSocket?.close();
   onlineSocket=null;
+
+  try{ socket?.close(); }catch{}
+
   onlineRoomState=null;
   game=null;
   $("joinedRoomView").classList.add("hidden");
@@ -1870,6 +1909,13 @@ function leaveOnlineRoom(){
   $("gameHeader").classList.add("hidden");
   $("gameMain").classList.add("hidden");
   setSocketState("未接続","disconnected");
+
+  if(playing){
+    showOnlineMessage(
+      `対戦から退室しました。ROOM ${roomNo>0?roomNo:"?"} には再接続できます。`
+    );
+  }
+
   updateReconnectSavedGameButton();
   fetchRoomSummaries();
 }

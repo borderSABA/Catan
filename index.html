@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.56（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.56">
+  <title>カタン オンライン v1.57（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.57">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.56</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.57</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -71,7 +71,7 @@
   <div id="desktopFitStage" class="desktop-fit-stage">
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.56</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.57</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
@@ -334,7 +334,12 @@
       </div>
 
       <div class="cpu-analysis-server-box">
-        <div id="cpuAnalysisServerStatus" class="cpu-analysis-status">サーバー解析：確認中...</div>
+        <div class="cpu-analysis-password-row">
+          <input id="cpuAnalysisServerPassword" type="password" maxlength="256" autocomplete="current-password" placeholder="解析サーバーパスワード">
+          <button id="cpuAnalysisServerAuthBtn" type="button" class="secondary">認証・更新</button>
+        </div>
+        <p class="cpu-analysis-password-note">パスワードはこのタブ内だけ保持します。GitHub側には保存しません。</p>
+        <div id="cpuAnalysisServerStatus" class="cpu-analysis-status">サーバー解析：パスワードを入力してください</div>
         <div class="cpu-analysis-main-actions">
           <button id="cpuAnalysisExportServerAllJson" type="button">サーバーJSON一括出力</button>
           <button id="cpuAnalysisRetryUpload" type="button" class="secondary">未送信を再送</button>
@@ -359,8 +364,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.56"></script>
-  <script src="online.js?version=v1.56"></script>
-  <script src="game.js?version=v1.56"></script>
+  <script src="config.js?version=v1.57"></script>
+  <script src="online.js?version=v1.57"></script>
+  <script src="game.js?version=v1.57"></script>
 </body>
 </html>

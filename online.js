@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.56";
+const APP_VERSION = "v1.57";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -651,14 +651,44 @@ function startProgressWatchdog(){
   );
 }
 
-function analysisAdminName(){
-  return String(
-    commonSavedName() ||
-    localStorage.getItem(ACTIVE_NAME_KEY) ||
-    currentOnlineName() ||
-    ""
-  ).trim().slice(0,32);
+const ANALYSIS_PASSWORD_SESSION_KEY="catanAnalysisAdminPassword";
+
+function analysisServerPassword(){
+  const input=document.getElementById("cpuAnalysisServerPassword");
+  const inputValue=typeof input?.value==="string"?input.value:"";
+  const saved=sessionStorage.getItem(ANALYSIS_PASSWORD_SESSION_KEY)||"";
+  const password=(inputValue||saved).slice(0,256);
+  if(input && !input.value && saved) input.value=saved;
+  return password;
 }
+
+function analysisRememberPassword(password){
+  const value=String(password||"").slice(0,256);
+  if(value){
+    sessionStorage.setItem(ANALYSIS_PASSWORD_SESSION_KEY,value);
+  }else{
+    sessionStorage.removeItem(ANALYSIS_PASSWORD_SESSION_KEY);
+  }
+  const input=document.getElementById("cpuAnalysisServerPassword");
+  if(input && input.value!==value) input.value=value;
+}
+
+function analysisRequirePassword(){
+  const password=analysisServerPassword();
+  if(!password){
+    throw new Error("解析サーバーパスワードを入力してください。");
+  }
+  analysisRememberPassword(password);
+  return password;
+}
+
+window.cpuAnalysisSetServerPassword=function(password){
+  analysisRememberPassword(password);
+};
+
+window.cpuAnalysisClearServerPassword=function(){
+  analysisRememberPassword("");
+};
 
 async function analysisFetchJson(path,options={}){
   if(!SERVER_ORIGIN) throw new Error("Worker URLが未設定です。");
@@ -682,6 +712,28 @@ async function analysisFetchJson(path,options={}){
     );
   }
   return data;
+}
+
+async function analysisAdminFetchJson(path,options={}){
+  const password=analysisRequirePassword();
+  try{
+    return await analysisFetchJson(path,{
+      ...options,
+      headers:{
+        ...(options.headers||{}),
+        "X-Analysis-Password":password,
+      },
+    });
+  }catch(error){
+    const message=String(error?.message||error||"");
+    if(
+      message.includes("パスワード") ||
+      message.includes("ANALYSIS_PASSWORD")
+    ){
+      window.cpuAnalysisClearServerPassword?.();
+    }
+    throw error;
+  }
 }
 
 window.cpuAnalysisServerUpload=async function(match){
@@ -708,49 +760,35 @@ window.cpuAnalysisServerUpload=async function(match){
 };
 
 window.cpuAnalysisServerStats=async function(){
-  const name=analysisAdminName();
-  if(!name) throw new Error("プレイヤー名を入力してください。");
-  return analysisFetchJson(
-    `/analysis/stats?name=${encodeURIComponent(name)}`
-  );
+  return analysisAdminFetchJson("/analysis/stats");
 };
 
 window.cpuAnalysisServerList=async function(){
-  const name=analysisAdminName();
-  if(!name) throw new Error("プレイヤー名を入力してください。");
-  return analysisFetchJson(
-    `/analysis/list?name=${encodeURIComponent(name)}`
-  );
+  return analysisAdminFetchJson("/analysis/list");
 };
 
 window.cpuAnalysisServerFetchMatch=async function(matchId){
-  const name=analysisAdminName();
-  if(!name) throw new Error("プレイヤー名を入力してください。");
-  return analysisFetchJson(
-    `/analysis/game?name=${encodeURIComponent(name)}&matchId=${encodeURIComponent(matchId)}`
+  return analysisAdminFetchJson(
+    `/analysis/game?matchId=${encodeURIComponent(matchId)}`
   );
 };
 
 window.cpuAnalysisServerDeleteMatch=async function(matchId){
-  const name=analysisAdminName();
-  if(!name) throw new Error("プレイヤー名を入力してください。");
-  return analysisFetchJson(
+  return analysisAdminFetchJson(
     "/analysis/delete",
     {
       method:"POST",
-      body:JSON.stringify({name,matchId}),
+      body:JSON.stringify({matchId}),
     }
   );
 };
 
 window.cpuAnalysisServerClear=async function(){
-  const name=analysisAdminName();
-  if(!name) throw new Error("プレイヤー名を入力してください。");
-  return analysisFetchJson(
+  return analysisAdminFetchJson(
     "/analysis/clear",
     {
       method:"POST",
-      body:JSON.stringify({name}),
+      body:JSON.stringify({}),
     }
   );
 };

@@ -86,7 +86,7 @@ const CPU_ANALYSIS_DB_VERSION=1;
 const CPU_ANALYSIS_STORE="matches";
 const CPU_ANALYSIS_MAX_MATCHES=12;
 const CPU_ANALYSIS_MAX_EVENTS=12000;
-const CPU_ANALYSIS_APP_VERSION="v1.56";
+const CPU_ANALYSIS_APP_VERSION="v1.57";
 const CPU_ANALYSIS_LOGIC_VERSION="MAX_BEAM_V155_ROAD_BALANCE";
 const CPU_ANALYSIS_SERVER_COMPACT_VERSION=1;
 
@@ -1040,7 +1040,7 @@ function cpuAnalysisEnsureSession(player=null){
         goal:"base + boardScore*0.68 + outcomeValue + contestAdjustment - distance*4.4 - eta*7.2 + lookaheadBonus",
         lookaheadDepthNormal:4,
         lookaheadDepthEndgame:5,
-        note:"v1.56 退室確認・対戦再接続保護版。CPUロジックはv1.55を維持。",
+        note:"v1.57 解析サーバー管理をパスワード認証へ変更。CPUロジックはv1.55を維持。",
       },
     },
     events:[],
@@ -1528,6 +1528,16 @@ async function cpuAnalysisRefreshServerUi(){
     return;
   }
 
+  const passwordInput=$("cpuAnalysisServerPassword");
+  const hasPassword=!!(
+    passwordInput?.value ||
+    sessionStorage.getItem("catanAnalysisAdminPassword")
+  );
+  if(!hasPassword){
+    status.textContent="サーバー解析：パスワードを入力してください";
+    return;
+  }
+
   status.textContent="サーバー解析：確認中...";
   try{
     const data=await window.cpuAnalysisServerStats();
@@ -1663,6 +1673,22 @@ function initCpuAnalysisUi(){
     if(records[0]) cpuAnalysisExportMatch(records[0].matchId,"csv");
   });
   $("cpuAnalysisExportAllJson")?.addEventListener("click",cpuAnalysisExportAll);
+  $("cpuAnalysisServerAuthBtn")?.addEventListener("click",async()=>{
+    const input=$("cpuAnalysisServerPassword");
+    const password=String(input?.value||"");
+    if(!password){
+      const status=$("cpuAnalysisServerStatus");
+      if(status) status.textContent="サーバー解析：パスワードを入力してください";
+      return;
+    }
+    window.cpuAnalysisSetServerPassword?.(password);
+    await cpuAnalysisRefreshServerUi();
+  });
+  $("cpuAnalysisServerPassword")?.addEventListener("keydown",event=>{
+    if(event.key!=="Enter") return;
+    event.preventDefault();
+    $("cpuAnalysisServerAuthBtn")?.click();
+  });
   $("cpuAnalysisExportServerAllJson")?.addEventListener(
     "click",
     cpuAnalysisExportServerAll

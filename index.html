@@ -6,14 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>カタン オンライン v1.58（私用）</title>
-  <link rel="stylesheet" href="style.css?version=v1.58">
+  <title>カタン オンライン v1.59（私用）</title>
+  <link rel="stylesheet" href="style.css?version=v1.59">
 </head>
 <body class="online-lobby-mode">
   <section id="onlineLobby" class="online-lobby">
     <div class="online-lobby-card">
       <div class="online-title">
-        <h1>カタン オンライン <span class="version-badge">v1.58</span></h1>
+        <h1>カタン オンライン <span class="version-badge">v1.59</span></h1>
         <p>固定4部屋・3～6人用</p>
       </div>
 
@@ -71,7 +71,7 @@
   <div id="desktopFitStage" class="desktop-fit-stage">
   <header id="gameHeader" class="hidden" hidden>
     <div>
-      <h1>カタン オンライン <span class="version-badge game-version">v1.58</span></h1>
+      <h1>カタン オンライン <span class="version-badge game-version">v1.59</span></h1>
       <p id="onlineGameSubtitle">スタンダード・3～6人用</p>
     </div>
     <div class="online-game-controls">
@@ -246,12 +246,14 @@
     </div>
   </div>
 
-  <div id="discardModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="discardTitle">
-    <div class="discard-dialog">
-      <h2 id="discardTitle">資源を捨てます</h2>
-      <p id="discardGuide"></p>
-      <div id="discardChoices" class="discard-choices"></div>
-      <div class="discard-summary">
+  <div id="discardModal" class="modal-backdrop critical-action-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="discardTitle">
+    <div class="discard-dialog critical-action-dialog">
+      <div class="critical-action-body">
+        <h2 id="discardTitle">資源を捨てます</h2>
+        <p id="discardGuide"></p>
+        <div id="discardChoices" class="discard-choices"></div>
+      </div>
+      <div class="discard-summary critical-action-footer">
         <span id="discardCount">選択 0 / 0枚</span>
         <button id="discardResetBtn" class="secondary discard-reset">選択を戻す</button>
         <button id="discardConfirmBtn" class="discard-confirm" disabled>確定</button>
@@ -260,38 +262,42 @@
   </div>
 
 
-  <div id="choiceModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="choiceTitle">
-    <div class="choice-dialog">
-      <h2 id="choiceTitle">選択してください</h2>
-      <p id="choiceGuide"></p>
-      <div id="choiceOptions" class="choice-options"></div>
-      <div class="choice-footer">
+  <div id="choiceModal" class="modal-backdrop critical-action-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="choiceTitle">
+    <div class="choice-dialog critical-action-dialog">
+      <div class="critical-action-body">
+        <h2 id="choiceTitle">選択してください</h2>
+        <p id="choiceGuide"></p>
+        <div id="choiceOptions" class="choice-options"></div>
+      </div>
+      <div class="choice-footer critical-action-footer">
         <button id="choiceCancelBtn" class="secondary">戻る</button>
       </div>
     </div>
   </div>
 
-  <div id="tradeModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="tradeModalTitle">
-    <div class="trade-dialog">
-      <h2 id="tradeModalTitle">プレイヤーと交易</h2>
-      <p>相手と交換内容を選択してください。複数種類・複数枚をまとめて提案できます。</p>
+  <div id="tradeModal" class="modal-backdrop critical-action-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="tradeModalTitle">
+    <div class="trade-dialog critical-action-dialog">
+      <div class="critical-action-body">
+        <h2 id="tradeModalTitle">プレイヤーと交易</h2>
+        <p>相手と交換内容を選択してください。複数種類・複数枚をまとめて提案できます。</p>
 
-      <h3>交易相手</h3>
-      <div id="tradePlayerChoices" class="trade-player-choices"></div>
+        <h3>交易相手</h3>
+        <div id="tradePlayerChoices" class="trade-player-choices"></div>
 
-      <div class="trade-editor-grid">
-        <section class="trade-editor offer">
-          <h3>あなたが渡す資源</h3>
-          <div id="tradeOfferEditor" class="trade-resource-editor"></div>
-        </section>
-        <section class="trade-editor request">
-          <h3>あなたが貰う資源</h3>
-          <div id="tradeRequestEditor" class="trade-resource-editor"></div>
-        </section>
+        <div class="trade-editor-grid">
+          <section class="trade-editor offer">
+            <h3>あなたが渡す資源</h3>
+            <div id="tradeOfferEditor" class="trade-resource-editor"></div>
+          </section>
+          <section class="trade-editor request">
+            <h3>あなたが貰う資源</h3>
+            <div id="tradeRequestEditor" class="trade-resource-editor"></div>
+          </section>
+        </div>
+
+        <div id="tradeProposalSummary" class="trade-proposal-summary"></div>
       </div>
-
-      <div id="tradeProposalSummary" class="trade-proposal-summary"></div>
-      <div class="trade-modal-footer">
+      <div class="trade-modal-footer critical-action-footer">
         <button id="tradeCancelBtn" class="secondary">取り消す</button>
         <button id="tradeConfirmBtn" class="trade-confirm" disabled>この内容で提案</button>
       </div>
@@ -364,8 +370,8 @@
     </div>
   </div>
 
-  <script src="config.js?version=v1.58"></script>
-  <script src="online.js?version=v1.58"></script>
-  <script src="game.js?version=v1.58"></script>
+  <script src="config.js?version=v1.59"></script>
+  <script src="online.js?version=v1.59"></script>
+  <script src="game.js?version=v1.59"></script>
 </body>
 </html>

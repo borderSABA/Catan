@@ -75,7 +75,7 @@ function keyPoint(x,y){ return `${Math.round(x*10)/10},${Math.round(y*10)/10}`; 
 function edgeKey(a,b){ return a < b ? `${a}|${b}` : `${b}|${a}`; }
 function deepClone(x){ return JSON.parse(JSON.stringify(x)); }
 
-// v1.58: CPU解析データ。
+// v1.59: CPU解析データ。モーダルUIのみ改善し、CPUロジックはv1.55を維持。
 // 詳細ログは「その時点でROOMホスト権限を持つ端末」のIndexedDBへ保存する。
 // 人間行動は「正式受理確認用の小さなレシート」だけ通常stateへ載せ、
 // Workerから返った後にホスト端末が解析ログへ確定する。
@@ -86,7 +86,7 @@ const CPU_ANALYSIS_DB_VERSION=1;
 const CPU_ANALYSIS_STORE="matches";
 const CPU_ANALYSIS_MAX_MATCHES=12;
 const CPU_ANALYSIS_MAX_EVENTS=12000;
-const CPU_ANALYSIS_APP_VERSION="v1.58";
+const CPU_ANALYSIS_APP_VERSION="v1.59";
 const CPU_ANALYSIS_LOGIC_VERSION="MAX_BEAM_V155_ROAD_BALANCE";
 const CPU_ANALYSIS_SERVER_COMPACT_VERSION=2;
 const CPU_ANALYSIS_UPLOADABLE_STATUSES=new Set(["finished","abandoned","incomplete"]);
@@ -1054,7 +1054,7 @@ function cpuAnalysisEnsureSession(player=null){
         goal:"base + boardScore*0.68 + outcomeValue + contestAdjustment - distance*4.4 - eta*7.2 + lookaheadBonus",
         lookaheadDepthNormal:4,
         lookaheadDepthEndgame:5,
-        note:"v1.58 正常終了・途中終了・ホスト交代の解析セグメント保存に対応。CPUロジックはv1.55を維持。",
+        note:"v1.59 スマホ重要操作モーダルを可変表示高＋本文スクロール＋操作欄固定へ改善。CPUロジックはv1.55を維持。",
       },
     },
     events:[],
@@ -2365,6 +2365,7 @@ function openChoiceModal({
   $("choiceGuide").textContent=guide;
   $("choiceCancelBtn").textContent=cancelText;
   $("choiceCancelBtn").classList.toggle("hidden",!allowCancel);
+  document.querySelector(".choice-footer")?.classList.toggle("hidden",!allowCancel);
   $("choiceOptions").innerHTML=options.map((option,index)=>`
     <button
       class="choice-option ${option.className||""}"

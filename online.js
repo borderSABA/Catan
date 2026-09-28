@@ -14,7 +14,7 @@ const COMMON_MANAGER_URL =
 
 const COMMON_PLAYER_NAME_KEY = "boardgamePlayerName";
 const ROOM_IDS = ["room1","room2","room3","room4"];
-const APP_VERSION = "v1.57";
+const APP_VERSION = "v1.58";
 
 const NAME_DRAFT_KEY =
   `${GAME_ID}-online-name-draft`;
@@ -740,8 +740,8 @@ window.cpuAnalysisServerUpload=async function(match){
   if(!isOnlineHost()){
     throw new Error("解析ログの送信はホストのみです。");
   }
-  const roomId=onlineRoomState?.roomId||onlineRoomId;
-  const gameSessionId=onlineRoomState?.gameSessionId||match?.meta?.gameSessionId;
+  const roomId=match?.meta?.roomId||onlineRoomState?.roomId||onlineRoomId;
+  const gameSessionId=match?.meta?.gameSessionId||onlineRoomState?.gameSessionId;
   if(!roomId || !gameSessionId || !onlineClientId){
     throw new Error("解析ログ送信に必要なROOM情報がありません。");
   }
@@ -1529,6 +1529,7 @@ function showGameScreen(){
 }
 
 function receiveRoomState(state){
+  const previousRoomState=onlineRoomState;
   onlineRoomState=state;
   onlineRoomId=state.roomId;
   updateReconnectSavedGameButton();
@@ -1634,6 +1635,12 @@ function receiveRoomState(state){
       requestStaleDiceRecovery();
       if(
         isOnlineHost() &&
+        typeof window.cpuAnalysisHandleAuthoritativeRoomState==="function"
+      ){
+        window.cpuAnalysisHandleAuthoritativeRoomState(previousRoomState,state);
+      }
+      if(
+        isOnlineHost() &&
         typeof cpuAnalysisRetryPendingUploads==="function"
       ){
         cpuAnalysisRetryPendingUploads();
@@ -1713,11 +1720,33 @@ function receiveRoomState(state){
 
     if(
       isOnlineHost() &&
+      typeof window.cpuAnalysisHandleAuthoritativeRoomState==="function"
+    ){
+      window.cpuAnalysisHandleAuthoritativeRoomState(previousRoomState,state);
+    }
+
+    if(
+      isOnlineHost() &&
       typeof cpuAnalysisRetryPendingUploads==="function"
     ){
       cpuAnalysisRetryPendingUploads();
     }
   }else{
+    if(
+      previousRoomState?.phase==="playing" &&
+      game &&
+      isOnlineHost() &&
+      typeof window.cpuAnalysisFinalizeInterrupted==="function"
+    ){
+      const status=game.winner!==null && game.winner!==undefined
+        ?"finished"
+        :"abandoned";
+      window.cpuAnalysisFinalizeInterrupted(
+        status,
+        status==="finished"?"victory_sync":"room_reset_sync",
+        {upload:true,detach:true}
+      );
+    }
     game=null;
     closeChoiceModal();
     closeTradeModal();
@@ -1891,7 +1920,7 @@ function startOnlineGame(){
   }
 }
 
-function leaveOnlineRoom(){
+async function leaveOnlineRoom(){
   const roomId=onlineRoomId;
   const playerName=String(
     localStorage.getItem(ACTIVE_NAME_KEY) ||
@@ -1928,6 +1957,24 @@ function leaveOnlineRoom(){
 
   clearTimeout(reconnectTimer);
 
+  /*
+    v1.58:
+    対戦中にROOMホストが退室する場合、その端末が保持している解析は
+    ここまでで1つの incomplete セグメントとして確定し、
+    ホスト権限を手放す前にサーバーへ送る。
+  */
+  if(
+    playing &&
+    isOnlineHost() &&
+    typeof window.cpuAnalysisFinalizeInterrupted==="function"
+  ){
+    await window.cpuAnalysisFinalizeInterrupted(
+      game?.winner!==null && game?.winner!==undefined?"finished":"incomplete",
+      game?.winner!==null && game?.winner!==undefined?"victory_sync":"host_left",
+      {upload:true,detach:true}
+    );
+  }
+
   if(onlineSocket?.readyState===WebSocket.OPEN){
     onlineSend({type:"leave"});
   }
@@ -1958,8 +2005,22 @@ function leaveOnlineRoom(){
   fetchRoomSummaries();
 }
 
-function resetOnlineRoom(){
+async function resetOnlineRoom(){
   if(!isOnlineHost()) return;
+
+  if(
+    onlineRoomState?.phase==="playing" &&
+    game &&
+    typeof window.cpuAnalysisFinalizeInterrupted==="function"
+  ){
+    const finished=game.winner!==null && game.winner!==undefined;
+    await window.cpuAnalysisFinalizeInterrupted(
+      finished?"finished":"abandoned",
+      finished?"victory_sync":"room_reset",
+      {upload:true,detach:true}
+    );
+  }
+
   onlineSend({
     type:"reset_room",
     actionId:newActionId("reset-lobby")

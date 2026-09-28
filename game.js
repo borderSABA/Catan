@@ -75,20 +75,21 @@ function keyPoint(x,y){ return `${Math.round(x*10)/10},${Math.round(y*10)/10}`; 
 function edgeKey(a,b){ return a < b ? `${a}|${b}` : `${b}|${a}`; }
 function deepClone(x){ return JSON.parse(JSON.stringify(x)); }
 
-// v1.53: CPU解析データ。
-// 詳細ログはホストPCのIndexedDBへ保存する。
+// v1.58: CPU解析データ。
+// 詳細ログは「その時点でROOMホスト権限を持つ端末」のIndexedDBへ保存する。
 // 人間行動は「正式受理確認用の小さなレシート」だけ通常stateへ載せ、
-// Workerから返った後にホストが解析ログへ確定する。
-// 終了時だけ軽量化した1試合分を解析保存APIへ1回送信する。
+// Workerから返った後にホスト端末が解析ログへ確定する。
+// 正常終了だけでなく、ROOM中断・ホスト交代時の部分ログも解析保存APIへ送信する。
 const CPU_ANALYSIS_SCHEMA_VERSION=2;
 const CPU_ANALYSIS_DB_NAME="catan-cpu-analysis";
 const CPU_ANALYSIS_DB_VERSION=1;
 const CPU_ANALYSIS_STORE="matches";
 const CPU_ANALYSIS_MAX_MATCHES=12;
 const CPU_ANALYSIS_MAX_EVENTS=12000;
-const CPU_ANALYSIS_APP_VERSION="v1.57";
+const CPU_ANALYSIS_APP_VERSION="v1.58";
 const CPU_ANALYSIS_LOGIC_VERSION="MAX_BEAM_V155_ROAD_BALANCE";
-const CPU_ANALYSIS_SERVER_COMPACT_VERSION=1;
+const CPU_ANALYSIS_SERVER_COMPACT_VERSION=2;
+const CPU_ANALYSIS_UPLOADABLE_STATUSES=new Set(["finished","abandoned","incomplete"]);
 
 let cpuAnalysisSession=null;
 let cpuAnalysisEventSeq=0;
@@ -796,6 +797,7 @@ function cpuAnalysisBuildServerPayload(record){
       playerCount:record.meta?.playerCount??null,
       fishermen:!!record.meta?.fishermen,
       players:cpuAnalysisClone(record.meta?.players||[]),
+      analysisSegment:cpuAnalysisClone(record.meta?.analysisSegment||null),
       scoringFormula:cpuAnalysisClone(record.meta?.scoringFormula||null),
       board:cpuAnalysisClone(record.meta?.board||null),
     },
@@ -807,6 +809,7 @@ function cpuAnalysisBuildServerPayload(record){
     events:compactEvents,
     result:record.result?{
       status:record.result.status,
+      reason:record.result.reason??null,
       endedAt:record.result.endedAt,
       winnerId:record.result.winnerId,
       winnerName:record.result.winnerName,
@@ -909,7 +912,7 @@ async function cpuAnalysisTryServerUpload(record=null){
   }
 
   const target=record||cpuAnalysisSession;
-  if(!target?.result || target.result.status!=="finished") return false;
+  if(!target?.result || !CPU_ANALYSIS_UPLOADABLE_STATUSES.has(target.result.status)) return false;
   if(target.serverUpload?.status==="saved") return true;
 
   if(
@@ -980,7 +983,7 @@ async function cpuAnalysisRetryPendingUploads(){
   const records=await cpuAnalysisGetMatches();
   for(const record of records.slice(0,CPU_ANALYSIS_MAX_MATCHES)){
     if(
-      record.result?.status==="finished" &&
+      CPU_ANALYSIS_UPLOADABLE_STATUSES.has(record.result?.status) &&
       record.serverUpload?.status!=="saved"
     ){
       await cpuAnalysisTryServerUpload(record);
@@ -1022,13 +1025,24 @@ function cpuAnalysisEnsureSession(player=null){
     appVersion:CPU_ANALYSIS_APP_VERSION,
     cpuLogicVersion:CPU_ANALYSIS_LOGIC_VERSION,
     matchId:cpuAnalysisMakeMatchId(),
-    startedAt:cpuAnalysisNowIso(),
+    startedAt:(
+      typeof onlineRoomState!=="undefined" && onlineRoomState?.startedAt
+        ?String(onlineRoomState.startedAt)
+        :cpuAnalysisNowIso()
+    ),
     updatedAt:cpuAnalysisNowIso(),
     meta:{
       roomId:game.roomId??null,
       gameSessionId:(typeof onlineRoomState!=="undefined" ? onlineRoomState?.gameSessionId : null)??null,
       playerCount:game.playerCount,
       fishermen:!!game.fishermen,
+      analysisSegment:{
+        startedAt:cpuAnalysisNowIso(),
+        startTurnSerial:game.turnSerial??null,
+        startTurnNo:game.turnNo??null,
+        startPhase:game.phase??null,
+        role:"room_host",
+      },
       boardSignature,
       board:cpuAnalysisBoardSnapshot(),
       players:game.players.map(other=>({
@@ -1040,7 +1054,7 @@ function cpuAnalysisEnsureSession(player=null){
         goal:"base + boardScore*0.68 + outcomeValue + contestAdjustment - distance*4.4 - eta*7.2 + lookaheadBonus",
         lookaheadDepthNormal:4,
         lookaheadDepthEndgame:5,
-        note:"v1.57 解析サーバー管理をパスワード認証へ変更。CPUロジックはv1.55を維持。",
+        note:"v1.58 正常終了・途中終了・ホスト交代の解析セグメント保存に対応。CPUロジックはv1.55を維持。",
       },
     },
     events:[],
@@ -1206,15 +1220,20 @@ function cpuAnalysisRecordSetupRoad(player,scored){
   );
 }
 
-function cpuAnalysisFinalizeMatch(winner=null){
-  if(!cpuAnalysisSession || cpuAnalysisSession.result) return;
+function cpuAnalysisSetTerminalResult(status,reason=null,winner=null){
+  if(!cpuAnalysisSession || cpuAnalysisSession.result) return null;
+  if(!CPU_ANALYSIS_UPLOADABLE_STATUSES.has(status)) return null;
+
   const winningPlayer=winner||(
-    game?.winner!==null && game?.winner!==undefined
+    status==="finished" && game?.winner!==null && game?.winner!==undefined
       ?playerById(game.winner)
       :null
   );
+
   cpuAnalysisSession.result={
-    status:winningPlayer?"finished":"abandoned",
+    status,
+    reason:reason||
+      (status==="finished"?"victory":status==="abandoned"?"manual_end":"interrupted"),
     endedAt:cpuAnalysisNowIso(),
     winnerId:winningPlayer?.id??null,
     winnerName:winningPlayer?.name??null,
@@ -1225,8 +1244,185 @@ function cpuAnalysisFinalizeMatch(winner=null){
     logHistory:cpuAnalysisClone(game?.logHistory||[]),
   };
   cpuAnalysisSession.updatedAt=cpuAnalysisSession.result.endedAt;
+  return cpuAnalysisSession;
+}
+
+function cpuAnalysisFinalizeMatch(winner=null){
+  const target=cpuAnalysisSetTerminalResult("finished","victory",winner);
+  if(!target) return false;
   cpuAnalysisPersistSession(true);
   cpuAnalysisQueueServerUpload();
+  return true;
+}
+
+async function cpuAnalysisFinalizeInterrupted(
+  status="incomplete",
+  reason="interrupted",
+  options={}
+){
+  const normalizedStatus=CPU_ANALYSIS_UPLOADABLE_STATUSES.has(status)
+    ?status
+    :"incomplete";
+
+  let target=cpuAnalysisSession;
+  if(!target && game?.players?.some(player=>!player.human)){
+    target=cpuAnalysisEnsureSession(currentPlayer());
+  }
+  if(!target) return false;
+
+  if(!target.result){
+    target=cpuAnalysisSetTerminalResult(
+      normalizedStatus,
+      reason,
+      normalizedStatus==="finished" && game?.winner!==null
+        ?playerById(game.winner)
+        :null
+    );
+  }
+  if(!target) return false;
+
+  await cpuAnalysisPersistRecord(target);
+  await cpuAnalysisPruneOldMatches();
+
+  let uploaded=false;
+  if(options.upload!==false){
+    uploaded=await cpuAnalysisTryServerUpload(target);
+  }
+
+  if(options.detach && cpuAnalysisSession===target){
+    cpuAnalysisSession=null;
+    cpuAnalysisDedupeKeys.clear();
+    cpuAnalysisAcceptedReceiptIds.clear();
+  }
+  return uploaded;
+}
+
+async function cpuAnalysisResumeHostSession(){
+  if(
+    !game ||
+    !game.players?.some(player=>!player.human) ||
+    (typeof isOnlineHost==="function" && !isOnlineHost())
+  ){
+    return false;
+  }
+
+  const gameSessionId=(
+    typeof onlineRoomState!=="undefined"
+      ?onlineRoomState?.gameSessionId
+      :null
+  )||null;
+  if(!gameSessionId) return false;
+
+  if(
+    cpuAnalysisSession &&
+    cpuAnalysisSession.meta?.gameSessionId===gameSessionId
+  ){
+    if(!cpuAnalysisSession.result || game.winner!==null) return true;
+  }
+
+  const records=await cpuAnalysisGetMatches();
+  const existing=records
+    .filter(record=>
+      !record.result &&
+      record.meta?.gameSessionId===gameSessionId
+    )
+    .sort((a,b)=>String(b.updatedAt||"").localeCompare(String(a.updatedAt||"")))[0];
+
+  if(existing){
+    cpuAnalysisSession=cpuAnalysisClone(existing);
+    cpuAnalysisEventSeq=Math.max(
+      0,
+      ...(cpuAnalysisSession.events||[]).map(event=>Number(event.seq)||0)
+    );
+    cpuAnalysisDedupeKeys.clear();
+    cpuAnalysisAcceptedReceiptIds.clear();
+    for(const event of cpuAnalysisSession.events||[]){
+      const receiptId=event?.type==="human_action"?event?.data?.receiptId:null;
+      if(receiptId) cpuAnalysisAcceptedReceiptIds.add(receiptId);
+    }
+    return true;
+  }
+
+  if(game.winner!==null && game.winner!==undefined){
+    const terminal=records
+      .filter(record=>
+        record.result &&
+        record.meta?.gameSessionId===gameSessionId
+      )
+      .sort((a,b)=>String(b.updatedAt||"").localeCompare(String(a.updatedAt||"")))[0];
+    if(terminal){
+      cpuAnalysisSession=cpuAnalysisClone(terminal);
+      cpuAnalysisEventSeq=Math.max(
+        0,
+        ...(cpuAnalysisSession.events||[]).map(event=>Number(event.seq)||0)
+      );
+      return true;
+    }
+  }
+
+  cpuAnalysisEnsureSession(currentPlayer());
+  cpuAnalysisRecordEvent(
+    "analysis_host_acquired",
+    currentPlayer(),
+    {
+      reason:"host_migration_or_reconnect",
+      state:cpuAnalysisStateSnapshot(currentPlayer(),true),
+    },
+    `analysis-host-acquired:${gameSessionId}:${game.turnSerial??0}`
+  );
+  return true;
+}
+
+function cpuAnalysisRecordRoomMembershipChanges(previousState,nextState){
+  if(!cpuAnalysisSession || !previousState || !nextState) return;
+  const previousMembers=new Map(
+    (previousState.members||[]).map(member=>[member.clientId,member])
+  );
+  const nextMembers=new Map(
+    (nextState.members||[]).map(member=>[member.clientId,member])
+  );
+  const ids=new Set([...previousMembers.keys(),...nextMembers.keys()]);
+
+  for(const clientId of ids){
+    const before=previousMembers.get(clientId);
+    const after=nextMembers.get(clientId);
+    const beforeConnected=!!before?.connected;
+    const afterConnected=!!after?.connected;
+    if(beforeConnected===afterConnected) continue;
+
+    const member=after||before;
+    const player=game?.players?.find(candidate=>
+      candidate.clientId===clientId ||
+      candidate.name===member?.name
+    )||null;
+    cpuAnalysisRecordEvent(
+      afterConnected?"participant_reconnect":"participant_disconnect",
+      player,
+      {
+        playerId:player?.id??null,
+        playerName:member?.name||player?.name||null,
+        connected:afterConnected,
+      },
+      `presence:${nextState.gameSessionId||"none"}:${clientId}:${afterConnected}:${nextState.serverRevision||nextState.updatedAt||""}`
+    );
+  }
+}
+
+async function cpuAnalysisHandleAuthoritativeRoomState(previousState,nextState){
+  if(
+    !game ||
+    (typeof isOnlineHost==="function" && !isOnlineHost())
+  ){
+    return false;
+  }
+
+  await cpuAnalysisResumeHostSession();
+  cpuAnalysisRecordRoomMembershipChanges(previousState,nextState);
+
+  if(game.winner!==null && game.winner!==undefined){
+    cpuAnalysisFinalizeMatch(playerById(game.winner));
+  }
+  return true;
 }
 
 function cpuAnalysisAbandonCurrent(reason="new_game"){
@@ -1236,22 +1432,21 @@ function cpuAnalysisAbandonCurrent(reason="new_game"){
     cpuAnalysisDedupeKeys.clear();
     return;
   }
-  cpuAnalysisSession.result={
-    status:"abandoned",
-    reason,
-    endedAt:cpuAnalysisNowIso(),
-    winnerId:null,
-    winnerName:null,
-    turns:game?.turnNo??null,
-    turnSerial:game?.turnSerial??null,
-    finalState:game?cpuAnalysisStateSnapshot(null,true):null,
-    diceHistory:cpuAnalysisClone(game?.diceHistory||[]),
-    logHistory:cpuAnalysisClone(game?.logHistory||[]),
-  };
-  cpuAnalysisPersistSession(true);
+  const target=cpuAnalysisSetTerminalResult("abandoned",reason,null);
+  if(target){
+    cpuAnalysisPersistRecord(target).then(async()=>{
+      await cpuAnalysisPruneOldMatches();
+      await cpuAnalysisTryServerUpload(target);
+    });
+  }
   cpuAnalysisSession=null;
   cpuAnalysisDedupeKeys.clear();
+  cpuAnalysisAcceptedReceiptIds.clear();
 }
+
+window.cpuAnalysisFinalizeInterrupted=cpuAnalysisFinalizeInterrupted;
+window.cpuAnalysisResumeHostSession=cpuAnalysisResumeHostSession;
+window.cpuAnalysisHandleAuthoritativeRoomState=cpuAnalysisHandleAuthoritativeRoomState;
 
 function cpuAnalysisOpenDb(){
   if(typeof indexedDB==="undefined") return Promise.resolve(null);
@@ -1543,7 +1738,8 @@ async function cpuAnalysisRefreshServerUi(){
     const data=await window.cpuAnalysisServerStats();
     const stats=data.stats||{};
     status.textContent=
-      `サーバー保存ゲーム：${stats.games||0}件`+
+      `サーバー保存ログ：${stats.games||0}件`+
+      `（完走${stats.finished||0}・中断${stats.abandoned||0}・部分${stats.incomplete||0}）`+
       `｜CPU判断：${stats.cpuDecisions||0}`+
       `｜人間判断：${stats.humanDecisions||0}`+
       `｜保存量：約${Math.round((stats.bytes||0)/1024)}KB`;
@@ -1624,8 +1820,10 @@ async function cpuAnalysisRefreshUi(){
     const statusText=result?.status==="finished"
       ?`勝者：${result.winnerName||"不明"}`
       :result?.status==="abandoned"
-        ?"中断"
-        :"記録中";
+        ?`中断${result.reason?`（${result.reason}）`:""}`
+        :result?.status==="incomplete"
+          ?`部分ログ${result.reason?`（${result.reason}）`:""}`
+          :"記録中";
     const cpuNames=(record.meta?.players||[]).filter(player=>!player.human).map(player=>player.name).join(" / ")||"CPUなし";
     return `
       <article class="cpu-analysis-match" data-analysis-match="${record.matchId}">
